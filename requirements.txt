@@ -1,0 +1,6 @@
+# render-bypass-apis/requirements.txt
+requests
+beautifulsoup4
+Flask
+gunicorn
+lxml # Optional but recommended for better parsing speed/reliability
