@@ -4,3 +4,4 @@ beautifulsoup4
 Flask
 gunicorn
 lxml # Optional but recommended for better parsing speed/reliability
+Flask-CORS
