@@ -9,6 +9,7 @@ import re
 import json
 import traceback
 import sys
+import os # Added for os.environ.get
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS # Import CORS
 
@@ -162,7 +163,7 @@ def get_gdflix_download_link(start_url):
 
             soup2 = BeautifulSoup(html_content_p2, PARSER)
             possible_tags_p2 = soup2.find_all(['a', 'button']) # Re-find tags on page 2
-            logs.append(f"Found {len(possible_tags_p2)} potential link/button tags on intermediate page ({page2_url}).") # Added URL
+            logs.append(f"Found {len(possible_tags_p2)} potential link/button tags on intermediate page ({page2_url}).")
 
             # --- Step 6: Find "Cloud Resume Download" button directly on intermediate page ---
             resume_link_tag = None
@@ -228,31 +229,24 @@ def get_gdflix_download_link(start_url):
                             if name:
                                 post_data[name] = value if value is not None else ''
                                 logs.append(f"    Extracted hidden input: name='{name}', value='{value}'")
-                        # Add button's name/value if it has them (less common for JS buttons)
                         btn_name = generate_tag.get('name')
                         btn_value = generate_tag.get('value')
                         if btn_name and generate_tag.name == 'button':
                              post_data[btn_name] = btn_value if btn_value is not None else ''
                              logs.append(f"    Added button data: name='{btn_name}', value='{btn_value}'")
 
-                    # Fallback/Base using old script's hardcoded values
-                    # IMPORTANT: The 'key' might change over time. This was from the old script.
                     default_post_data = {'action': 'cloud', 'key': '08df4425e31c4330a1a0a3cefc45c19e84d0a192', 'action_token': ''}
-                    # Merge extracted data over defaults (form data takes precedence)
                     final_post_data = {**default_post_data, **post_data}
-                    # Ensure 'action' key is present if not found in form
                     if 'action' not in final_post_data: final_post_data['action'] = 'cloud'
                     logs.append(f"  Final POST data payload: {final_post_data}")
 
                     parsed_uri = urlparse(page2_url)
                     hostname = parsed_uri.netloc
-                    # Headers based on old script analysis + common AJAX headers
                     post_headers = {
                         'Referer': page2_url,
-                        'x-token': hostname, # Crucial header from old script
-                        'Accept': 'application/json, text/javascript, */*; q=0.01', # Mimic AJAX request
-                        'X-Requested-With': 'XMLHttpRequest', # Mimic AJAX request
-                        # User-Agent etc. are handled by the session
+                        'x-token': hostname,
+                        'Accept': 'application/json, text/javascript, */*; q=0.01',
+                        'X-Requested-With': 'XMLHttpRequest',
                     }
                     logs.append(f"  POST headers (excluding session defaults): {post_headers}")
 
@@ -261,46 +255,81 @@ def get_gdflix_download_link(start_url):
                     try:
                         post_response = session.post(page2_url, data=final_post_data, headers=post_headers, timeout=REQUEST_TIMEOUT)
                         logs.append(f"  POST response status: {post_response.status_code}")
-                        # Don't raise_for_status yet, check content type first
-                        # post_response.raise_for_status()
 
+                        # --- MODIFIED POST RESPONSE HANDLING ---
                         content_type = post_response.headers.get('Content-Type', '').lower()
+                        response_text = post_response.text # Get text once for potential parsing
+                        extracted_poll_url = False # Flag to track if we got the URL
+
+                        # Scenario 1: Content-Type is JSON (Expected)
                         if 'application/json' in content_type:
                             try:
                                 response_data = post_response.json()
-                                logs.append(f"  POST response JSON: {response_data}")
-
+                                logs.append(f"  POST response JSON (from header): {response_data}")
                                 # Check for success/error and extract polling URL
                                 if post_response.status_code == 200 and not response_data.get('error'):
                                      poll_url_relative = response_data.get('visit_url') or response_data.get('url')
                                      if poll_url_relative:
-                                         page3_url = urljoin(page2_url, poll_url_relative) # Use page2_url as base
+                                         page3_url = urljoin(page2_url, poll_url_relative)
                                          logs.append(f"  POST successful. Extracted polling URL: {page3_url}")
+                                         extracted_poll_url = True # Mark success
                                      else:
                                          logs.append("  Error: POST success status but no 'visit_url' or 'url' key found in JSON.")
-                                         return None, logs
                                 elif response_data.get('error'):
                                      error_msg = response_data.get('message', 'Unknown error from server POST response')
                                      logs.append(f"  Error from POST JSON response: {error_msg} (Status: {post_response.status_code})")
-                                     return None, logs
                                 else: # Non-200 status but JSON response
                                      logs.append(f"  Error: POST returned status {post_response.status_code} with JSON, but format unclear.")
                                      logs.append(f"  Response JSON: {response_data}")
-                                     return None, logs
 
                             except json.JSONDecodeError:
-                                logs.append(f"  Error: Failed to decode JSON response from POST, though Content-Type was JSON.")
-                                logs.append(f"  Response text (first 500 chars): {post_response.text[:500]}")
-                                return None, logs
-                        else: # Content-Type is not JSON
-                             logs.append(f"  Error: POST response Content-Type is not JSON ('{content_type}'). Status: {post_response.status_code}")
-                             logs.append(f"  Response text (first 500 chars): {post_response.text[:500]}")
-                             if "cloudflare" in post_response.text.lower() or "captcha" in post_response.text.lower():
+                                logs.append(f"  Error: Failed to decode JSON response, though Content-Type was JSON.")
+                                logs.append(f"  Response text (first 500 chars): {response_text[:500]}")
+
+                        # Scenario 2: Content-Type NOT JSON, but Status 200 (Workaround)
+                        elif post_response.status_code == 200:
+                            logs.append(f"  Info: POST Content-Type is '{content_type}', not JSON. Status 200 received. Attempting to parse body as JSON anyway...")
+                            try:
+                                response_data = json.loads(response_text)
+                                logs.append(f"  Success: Parsed response body as JSON despite incorrect Content-Type.")
+                                logs.append(f"  Parsed JSON data: {response_data}")
+                                # Now extract the URL like in the application/json block
+                                if not response_data.get('error'):
+                                    poll_url_relative = response_data.get('visit_url') or response_data.get('url')
+                                    if poll_url_relative:
+                                        page3_url = urljoin(page2_url, poll_url_relative)
+                                        logs.append(f"  Extracted polling URL from parsed text: {page3_url}")
+                                        extracted_poll_url = True # Mark success
+                                    else:
+                                        logs.append("  Error: Parsed JSON successfully but no 'visit_url' or 'url' key found.")
+                                elif response_data.get('error'):
+                                    error_msg = response_data.get('message', 'Unknown error in parsed JSON')
+                                    logs.append(f"  Error found in parsed JSON: {error_msg}")
+                                else: # Parsed but unclear structure
+                                    logs.append("  Warning: Parsed JSON but structure is unexpected (no error/url keys).")
+                            except json.JSONDecodeError:
+                                logs.append(f"  Error: Failed to decode potentially JSON response body (Content-Type was '{content_type}', Status 200).")
+                                logs.append(f"  Response text (first 500 chars): {response_text[:500]}")
+                                # If parsing fails here, extracted_poll_url remains False
+
+                        # Scenario 3: Status is not 200 or other Content-Types
+                        else:
+                             logs.append(f"  Error: POST response status was {post_response.status_code} or Content-Type '{content_type}' was unexpected.")
+                             # Log response text if not already logged during parsing attempt
+                             if not response_text.strip(): logs.append("  Response body was empty.")
+                             else: logs.append(f"  Response text (first 500 chars): {response_text[:500]}")
+                             if "cloudflare" in response_text.lower() or "captcha" in response_text.lower():
                                  logs.append("  Hint: Cloudflare/Captcha challenge likely blocked the POST request.")
-                             # Attempt to raise status for non-JSON errors like 403, 5xx etc.
-                             try: post_response.raise_for_status()
-                             except requests.exceptions.HTTPError as http_err: logs.append(f"  HTTP Error raised: {http_err}")
-                             return None, logs
+
+                        # --- Check if polling URL was obtained ---
+                        if not extracted_poll_url:
+                             logs.append(f"  Error: Failed to obtain a valid polling URL from the POST response.")
+                             # Try to raise status for non-200 errors if not already handled
+                             try:
+                                 if post_response.status_code != 200: post_response.raise_for_status()
+                             except requests.exceptions.HTTPError as http_err: logs.append(f"  HTTP Error details: {http_err}")
+                             return None, logs # Exit if poll URL couldn't be obtained
+                        # --- END MODIFIED POST RESPONSE HANDLING ---
 
                     except requests.exceptions.RequestException as post_err:
                         logs.append(f"  Error during POST request network operation: {post_err}")
@@ -334,7 +363,6 @@ def get_gdflix_download_link(start_url):
 
                                 poll_soup = BeautifulSoup(poll_html, PARSER)
                                 polled_resume_tag = None
-                                # Reuse the resume_text_pattern
                                 for tag in poll_soup.find_all(['a', 'button']):
                                     if resume_text_pattern.search(tag.get_text(strip=True)):
                                         polled_resume_tag = tag
@@ -349,15 +377,11 @@ def get_gdflix_download_link(start_url):
 
                                     if not final_link_href:
                                         logs.append(f"    Error: Found polled '{polled_resume_tag.get_text(strip=True)}' element but no href/action.")
-                                        return None, logs # Fail if href missing after finding tag
+                                        return None, logs
 
-                                    # IMPORTANT: Use poll_landed_url as the base for the final link
                                     final_download_link = urljoin(poll_landed_url, final_link_href)
                                     logs.append(f"Success: Found final Cloud Resume link URL after polling: {final_download_link}")
                                     return final_download_link, logs # <<< SUCCESS PATH
-
-                                # If resume button not found on this poll iteration, log snippet if needed and loop continues
-                                # logs.append(f"    'Cloud Resume Download' not yet found on {poll_landed_url}. Polling continues...")
 
                             except requests.exceptions.Timeout:
                                  logs.append(f"  Warning: Timeout during polling request to {page3_url}. Will retry.")
@@ -365,16 +389,14 @@ def get_gdflix_download_link(start_url):
                                  logs.append(f"  Warning: Network error during polling request: {poll_err}. Will retry.")
                             except Exception as parse_err:
                                  logs.append(f"  Warning: Error parsing polled page {poll_landed_url or page3_url}: {parse_err}. Will retry.")
-                            # Loop continues if no final link found yet and no fatal error
 
                         # --- Polling Timeout ---
                         logs.append(f"Error: Link generation timed out after {GENERATION_TIMEOUT}s of polling {page3_url}.")
-                        return None, logs
-                    # else: page3_url wasn't obtained from POST, error already logged and returned None
+                        return None, logs # Return None on timeout
+                    # else: Logic ensures page3_url must exist to reach here
 
                 else: # Generate button wasn't found on intermediate page (neither by ID nor text)
                     logs.append("Error: Neither 'Cloud Resume Download' nor 'Generate Cloud Link' button/pattern found on the intermediate page.")
-                    # Log intermediate page snippet for debugging
                     body_tag_p2 = soup2.find('body')
                     logs.append("--- Intermediate Page Body Snippet (for debugging why buttons were missed) ---")
                     logs.append(str(body_tag_p2)[:1000] + '...' if body_tag_p2 else html_content_p2[:1000] + '...')
@@ -386,7 +408,6 @@ def get_gdflix_download_link(start_url):
             logs.append("Info: 'Fast Cloud Download' button/pattern not found on final content page. Checking for 'PixeldrainDL'...")
             pixeldrain_link_tag = None
             pixeldrain_pattern = re.compile(r'pixeldrain\s*(dl)?', re.IGNORECASE)
-            # Search on the final content page soup (soup1)
             for tag in possible_tags_p1:
                  tag_text = tag.get_text(strip=True)
                  if pixeldrain_pattern.search(tag_text):
@@ -400,15 +421,13 @@ def get_gdflix_download_link(start_url):
                      if parent_form: pixeldrain_href = parent_form.get('action')
 
                  if pixeldrain_href:
-                     # Use page1_url (final landed URL) as base
                      pixeldrain_full_url = urljoin(page1_url, pixeldrain_href)
                      logs.append(f"Success: Found Pixeldrain link URL: {pixeldrain_full_url}")
                      return pixeldrain_full_url, logs
                  else:
                      logs.append(f"Error: Found Pixeldrain element but couldn't get href/action.")
-                     return None, logs # Fail if href missing
+                     return None, logs
             else:
-                # If Pixeldrain also fails
                 logs.append("Error: Neither 'Fast Cloud Download/DL' nor 'Pixeldrain(DL)' link/button found on the final content page.")
                 return None, logs
 
@@ -433,7 +452,7 @@ def get_gdflix_download_link(start_url):
     return None, logs
 
 
-# --- Flask API Endpoint (No changes needed here) ---
+# --- Flask API Endpoint ---
 @app.route('/api/gdflix', methods=['POST'])
 def gdflix_bypass_api():
     script_logs = []
@@ -477,26 +496,50 @@ def gdflix_bypass_api():
             result["error"] = None
             status_code = 200 # OK
         else:
+            # --- MODIFIED ERROR MESSAGE HANDLING ---
             script_logs.append("Bypass process failed to find the final download link.")
             result["success"] = False
             failure_indicators = ["Error:", "FATAL:", "FAILED", "timed out", "neither", "blocked", "exceeded maximum"]
-            extracted_error = "GDFLIX Extraction Failed (Check logs)"
+            extracted_error = "GDFLIX Extraction Failed (Check logs for details)" # Default generic
+            timeout_occurred = False # Flag for timeout
+
+            # Find the last relevant error log entry
+            last_error_log = ""
             for log_entry in reversed(script_logs):
                 log_entry_lower = log_entry.lower()
-                if any(indicator.lower() in log_entry_lower for indicator in failure_indicators):
-                     # Try to get text after the indicator word
-                     parts = re.split(r'(?:Error|FATAL|Info|Warning):\s*', log_entry, maxsplit=1, flags=re.IGNORECASE)
-                     extracted_error = (parts[-1] if len(parts) > 1 else log_entry).strip()
-                     # Prioritize specific known failure messages
-                     if "Neither 'Cloud Resume Download' nor 'Generate Cloud Link'" in extracted_error:
-                         extracted_error = "Could not find required buttons on intermediate page."
-                     elif "Link generation timed out" in extracted_error:
-                          extracted_error = "Link generation process timed out."
-                     elif "Exceeded maximum redirect hops" in extracted_error:
-                           extracted_error = "Too many redirects encountered."
-                     break
+                # Check if it contains any indicator word, prioritizing timeout
+                if "link generation timed out" in log_entry_lower:
+                    last_error_log = log_entry
+                    timeout_occurred = True
+                    break # Stop searching once timeout is confirmed
+                elif any(indicator.lower() in log_entry_lower for indicator in failure_indicators):
+                    last_error_log = log_entry
+                    # Don't break here yet, keep searching in case a timeout message appears later in the reversed logs
+            
+            # Set the final error message based on what happened
+            if timeout_occurred:
+                # If polling timed out, use the specific message
+                extracted_error = "Link is generating, please try again after a few minutes."
+                script_logs.append(f"API Info: Reporting timeout as '{extracted_error}'") # Add log clarification
+            elif last_error_log:
+                # If some other error occurred, extract its message
+                parts = re.split(r'(?:Error|FATAL|Info|Warning):\s*', last_error_log, maxsplit=1, flags=re.IGNORECASE)
+                extracted_error = (parts[-1] if len(parts) > 1 else last_error_log).strip()
+                # Add specific overrides for other common failures based on log text
+                if "Neither 'Cloud Resume Download' nor 'Generate Cloud Link'" in extracted_error:
+                     extracted_error = "Could not find required buttons on intermediate page."
+                elif "Exceeded maximum redirect hops" in extracted_error:
+                       extracted_error = "Too many redirects encountered."
+                elif "Failed to obtain a valid polling URL" in extracted_error:
+                       extracted_error = "Failed to initiate link generation process."
+                elif "Failed to retrieve final page content" in extracted_error:
+                     extracted_error = "Could not load initial page content."
+                # Add more specific messages based on logs...
+            # else: Keep the default generic error if no specific log indicator found
+
             result["error"] = extracted_error[:250] # Limit error length
-            status_code = 200 # Use 200 OK even for failure, client checks "success"
+            status_code = 200 # Use 200 OK even for failure, client checks "success" flag
+            # --- END MODIFIED ERROR MESSAGE HANDLING ---
 
     except Exception as e:
         print(f"FATAL API Handler Error: {e}", file=sys.stderr)
