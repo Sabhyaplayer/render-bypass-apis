@@ -15,11 +15,9 @@ from flask_cors import CORS # Import CORS
 
 # Try importing lxml, fall back to html.parser if not installed
 try:
-    # from bs4 import BeautifulSoup # Already imported above
     PARSER = "lxml"
     LXML_AVAILABLE = True
 except ImportError:
-    # from bs4 import BeautifulSoup # Already imported above
     PARSER = "html.parser"
     print("Warning: lxml not found, using html.parser.", file=sys.stderr)
 
@@ -43,11 +41,8 @@ MAX_REDIRECT_HOPS = 5 # Max secondary HTML/JS redirects to follow
 
 # --- Core GDFLIX Bypass Function (with Redirect Loop and Fixed Generate Logic) ---
 def get_gdflix_download_link(start_url):
-    # --- Session Setup ---
     session = requests.Session()
     session.headers.update(HEADERS)
-    # Cloudscraper logic remains commented out unless needed
-
     logs = []
     current_url = start_url
     hops_count = 0
@@ -55,7 +50,6 @@ def get_gdflix_download_link(start_url):
     html_content = None
 
     try:
-        # --- Loop to follow HTTP (via allow_redirects) and secondary HTML/JS redirects ---
         while hops_count < MAX_REDIRECT_HOPS:
             logs.append(f"[Hop {hops_count}] Fetching/Checking URL: {current_url}")
             try:
@@ -108,8 +102,7 @@ def get_gdflix_download_link(start_url):
              logs.append("Error: Failed to retrieve final page content after redirect checks.")
              return None, logs
 
-        page1_url = landed_url # This is the final URL after redirects
-
+        page1_url = landed_url
         logs.append(f"--- Final Content Page HTML Snippet (URL: {page1_url}) ---")
         logs.append(html_content[:3000] + ('...' if len(html_content) > 3000 else ''))
         logs.append(f"--- End Final Content Page HTML Snippet ---")
@@ -121,70 +114,97 @@ def get_gdflix_download_link(start_url):
         possible_tags_p1 = soup1.find_all(['a', 'button'])
         logs.append(f"Found {len(possible_tags_p1)} potential link/button tags on final content page ({page1_url}).")
 
-        # --- MODIFIED: Step 2.5: Prioritize "CLOUD DOWNLOAD [R2]" on FINAL page ---
-        cloud_r2_link_tag = None
-        # Regex to match "CLOUD DOWNLOAD [R2]" (case-insensitive, flexible spacing)
-        # The `\[` and `\]` match literal square brackets.
-        cloud_r2_pattern = re.compile(r'cloud\s+download\s+\[R2\]', re.IGNORECASE)
+        # --- PRIORITY 1: Look for "PixeldrainDL" or "Pixeldrain" ---
+        logs.append("Searching for 'PixeldrainDL' or 'Pixeldrain' button text pattern on final content page...")
+        pixeldrain_link_tag = None
+        pixeldrain_pattern = re.compile(r'pixeldrain\s*(dl)?', re.IGNORECASE)
+        for tag in possible_tags_p1:
+             tag_text = tag.get_text(strip=True)
+             if pixeldrain_pattern.search(tag_text):
+                pixeldrain_link_tag = tag
+                logs.append(f"  Success: Found potential Pixeldrain tag: <{tag.name}> with text '{tag_text}'")
+                break
+        
+        if pixeldrain_link_tag:
+             pixeldrain_href = pixeldrain_link_tag.get('href')
+             if not pixeldrain_href and pixeldrain_link_tag.name == 'button':
+                 parent_form = pixeldrain_link_tag.find_parent('form')
+                 if parent_form: 
+                     pixeldrain_href = parent_form.get('action')
+                     logs.append(f"    Extracted href from parent form action: {pixeldrain_href}")
+
+             if pixeldrain_href:
+                 pixeldrain_full_url = urljoin(page1_url, pixeldrain_href)
+                 logs.append(f"Success: Found Pixeldrain link URL: {pixeldrain_full_url}")
+                 return pixeldrain_full_url, logs
+             else:
+                 logs.append(f"  Info: Found Pixeldrain element ('{pixeldrain_link_tag.get_text(strip=True)}') but couldn't get href/action. Trying next priority.")
+        else:
+            logs.append("Info: 'PixeldrainDL' or 'Pixeldrain' button/pattern not found. Trying next priority.")
+
+
+        # --- PRIORITY 2: Look for "CLOUD DOWNLOAD [R2]" ---
         logs.append("Searching for 'CLOUD DOWNLOAD [R2]' button text pattern on final content page...")
+        cloud_r2_link_tag = None
+        cloud_r2_pattern = re.compile(r'cloud\s+download\s+\[R2\]', re.IGNORECASE)
         for tag in possible_tags_p1:
             tag_text = tag.get_text(strip=True)
             if cloud_r2_pattern.search(tag_text):
                 cloud_r2_link_tag = tag
-                logs.append(f"Success: Found primary target 'CLOUD DOWNLOAD [R2]': <{tag.name}> with text '{tag_text}'")
+                logs.append(f"  Success: Found potential 'CLOUD DOWNLOAD [R2]' tag: <{tag.name}> with text '{tag_text}'")
                 break
-
+        
         if cloud_r2_link_tag:
             cloud_r2_href = cloud_r2_link_tag.get('href')
-            if not cloud_r2_href and cloud_r2_link_tag.name == 'button': # Check form action if it's a button
+            if not cloud_r2_href and cloud_r2_link_tag.name == 'button':
                 parent_form = cloud_r2_link_tag.find_parent('form')
-                if parent_form:
+                if parent_form: 
                     cloud_r2_href = parent_form.get('action')
-                    logs.append(f"  Extracted href from parent form action: {cloud_r2_href}")
-
-
-            if not cloud_r2_href:
-                logs.append(f"Error: Found '{cloud_r2_link_tag.get_text(strip=True)}' (CLOUD DOWNLOAD [R2]) element but couldn't get href/action.")
-                return None, logs # If R2 button is present but no link, consider it an error for this prioritized path
-
-            final_download_link = urljoin(page1_url, cloud_r2_href) # Use final landed URL as base
-            logs.append(f"Success: Found direct R2 download link: {final_download_link}")
-            return final_download_link, logs
+                    logs.append(f"    Extracted href from parent form action: {cloud_r2_href}")
+            
+            if cloud_r2_href:
+                final_download_link = urljoin(page1_url, cloud_r2_href)
+                logs.append(f"Success: Found R2 download link: {final_download_link}")
+                return final_download_link, logs
+            else:
+                logs.append(f"  Info: Found 'CLOUD DOWNLOAD [R2]' element ('{cloud_r2_link_tag.get_text(strip=True)}') but couldn't get href/action. Trying next priority.")
         else:
-            logs.append("Info: 'CLOUD DOWNLOAD [R2]' button/pattern not found on final content page. Proceeding with other checks.")
-            # --- If "CLOUD DOWNLOAD [R2]" was NOT found, proceed to "Fast Cloud Download" logic ---
+            logs.append("Info: 'CLOUD DOWNLOAD [R2]' button/pattern not found. Trying next priority.")
+        
 
-            # --- Step 3: Find Fast Cloud Download button on FINAL page ---
-            fast_cloud_link_tag = None
-            fast_cloud_pattern = re.compile(r'fast\s*cloud\s*(download|dl)', re.IGNORECASE)
-            logs.append("Searching for 'Fast Cloud Download/DL' button text pattern on final content page...")
-            for i, tag in enumerate(possible_tags_p1): # Re-iterate or continue search
-                tag_text = tag.get_text(strip=True)
-                if fast_cloud_pattern.search(tag_text):
-                    fast_cloud_link_tag = tag
-                    logs.append(f"Success: Found potential primary target: <{tag.name}> with text '{tag_text}'")
-                    break
+        # --- PRIORITY 3: Look for "Fast Cloud Download" ---
+        logs.append("Searching for 'Fast Cloud Download/DL' button text pattern on final content page...")
+        fast_cloud_link_tag = None
+        fast_cloud_pattern = re.compile(r'fast\s*cloud\s*(download|dl)', re.IGNORECASE)
+        for tag in possible_tags_p1:
+            tag_text = tag.get_text(strip=True)
+            if fast_cloud_pattern.search(tag_text):
+                fast_cloud_link_tag = tag
+                logs.append(f"  Success: Found potential 'Fast Cloud Download' tag: <{tag.name}> with text '{tag_text}'")
+                break
 
-            # --- If Fast Cloud button WAS found ---
-            if fast_cloud_link_tag:
-                fast_cloud_href = fast_cloud_link_tag.get('href')
-                if not fast_cloud_href and fast_cloud_link_tag.name == 'button':
-                    parent_form = fast_cloud_link_tag.find_parent('form')
-                    if parent_form: fast_cloud_href = parent_form.get('action')
+        if fast_cloud_link_tag:
+            fast_cloud_href = fast_cloud_link_tag.get('href')
+            if not fast_cloud_href and fast_cloud_link_tag.name == 'button':
+                parent_form = fast_cloud_link_tag.find_parent('form')
+                if parent_form: 
+                    fast_cloud_href = parent_form.get('action')
+                    logs.append(f"    Extracted href from parent form action: {fast_cloud_href}")
 
-                if not fast_cloud_href:
-                    logs.append(f"Error: Found '{fast_cloud_link_tag.get_text(strip=True)}' element but couldn't get href/action.")
-                    return None, logs
-
-                intermediate_url = urljoin(page1_url, fast_cloud_href) # Use final landed URL as base
+            if not fast_cloud_href:
+                logs.append(f"  Error: Found '{fast_cloud_link_tag.get_text(strip=True)}' (Fast Cloud) element but couldn't get href/action. All priorities exhausted for direct links.")
+                # This means this path failed, so it will fall through to the final error message at the end of the function.
+            else:
+                # --- Start of Fast Cloud multi-step logic ---
+                intermediate_url = urljoin(page1_url, fast_cloud_href)
                 logs.append(f"Found intermediate link URL (from Fast Cloud button): {intermediate_url}")
-                time.sleep(1)
+                time.sleep(1) # Small delay before hitting next page
 
                 logs.append(f"Fetching intermediate page URL (potentially with Generate button): {intermediate_url}")
                 fetch_headers_p2 = {'Referer': page1_url}
                 response_intermediate = session.get(intermediate_url, timeout=REQUEST_TIMEOUT, headers=fetch_headers_p2, allow_redirects=True)
-                response_intermediate.raise_for_status()
-                page2_url = response_intermediate.url # URL after redirects for the intermediate page
+                response_intermediate.raise_for_status() # Handled by outer try-except for HTTP/Request errors
+                page2_url = response_intermediate.url 
                 html_content_p2 = response_intermediate.text
                 logs.append(f"Landed on intermediate page: {page2_url} (Status: {response_intermediate.status_code})")
 
@@ -195,10 +215,9 @@ def get_gdflix_download_link(start_url):
                      logs.append("WARNING: Potential Cloudflare challenge page detected on Intermediate Page!")
 
                 soup2 = BeautifulSoup(html_content_p2, PARSER)
-                possible_tags_p2 = soup2.find_all(['a', 'button']) # Re-find tags on page 2
+                possible_tags_p2 = soup2.find_all(['a', 'button'])
                 logs.append(f"Found {len(possible_tags_p2)} potential link/button tags on intermediate page ({page2_url}).")
 
-                # --- Step 6: Find "Cloud Resume Download" button directly on intermediate page ---
                 resume_link_tag = None
                 resume_text_pattern = re.compile(r'cloud\s+resume\s+download', re.IGNORECASE)
                 logs.append("Searching for 'Cloud Resume Download' button text pattern on intermediate page...")
@@ -209,7 +228,6 @@ def get_gdflix_download_link(start_url):
                         logs.append(f"Success: Found final link tag directly: <{tag.name}> with text '{tag_text}'")
                         break
 
-                # Step 6a: If final link found directly
                 if resume_link_tag:
                     final_link_href = resume_link_tag.get('href')
                     if not final_link_href and resume_link_tag.name == 'button':
@@ -218,17 +236,14 @@ def get_gdflix_download_link(start_url):
 
                     if not final_link_href:
                         logs.append(f"Error: Found '{resume_link_tag.get_text(strip=True)}' but no href/action.")
-                        return None, logs
+                        return None, logs # Fail this Fast Cloud path
 
-                    final_download_link = urljoin(page2_url, final_link_href) # Use intermediate page URL as base
+                    final_download_link = urljoin(page2_url, final_link_href)
                     logs.append(f"Success: Found final Cloud Resume link URL directly: {final_download_link}")
                     return final_download_link, logs
-
-                # Step 6b: If not found directly, check for "Generate Cloud Link" button (FIXED LOGIC)
                 else:
                     logs.append("Info: 'Cloud Resume Download' not found directly. Checking for 'Generate Cloud Link' button...")
-                    generate_tag = None # Initialize
-
+                    generate_tag = None
                     generate_tag_by_id = soup2.find('button', id='cloud')
                     if generate_tag_by_id:
                         logs.append("  Found 'Generate Cloud Link' button by id='cloud'.")
@@ -242,7 +257,7 @@ def get_gdflix_download_link(start_url):
                                 generate_tag = tag
                                 logs.append(f"  Success: Found potential generate tag by text: <{tag.name}> with text '{tag_text}'")
                                 break
-
+                    
                     if generate_tag:
                         logs.append(f"Found 'Generate Cloud Link' button: <{generate_tag.name}> id='{generate_tag.get('id', 'N/A')}'")
                         logs.append("Attempting to mimic the JavaScript POST request...")
@@ -259,7 +274,7 @@ def get_gdflix_download_link(start_url):
                                     logs.append(f"    Extracted hidden input: name='{name}', value='{value}'")
                             btn_name = generate_tag.get('name')
                             btn_value = generate_tag.get('value')
-                            if btn_name and generate_tag.name == 'button':
+                            if btn_name and generate_tag.name == 'button': # only add button if it has name
                                  post_data[btn_name] = btn_value if btn_value is not None else ''
                                  logs.append(f"    Added button data: name='{btn_name}', value='{btn_value}'")
 
@@ -283,7 +298,6 @@ def get_gdflix_download_link(start_url):
                         try:
                             post_response = session.post(page2_url, data=final_post_data, headers=post_headers, timeout=REQUEST_TIMEOUT)
                             logs.append(f"  POST response status: {post_response.status_code}")
-
                             content_type = post_response.headers.get('Content-Type', '').lower()
                             response_text = post_response.text
                             extracted_poll_url = False
@@ -343,10 +357,10 @@ def get_gdflix_download_link(start_url):
                                  try:
                                      if post_response.status_code != 200: post_response.raise_for_status()
                                  except requests.exceptions.HTTPError as http_err: logs.append(f"  HTTP Error details: {http_err}")
-                                 return None, logs
+                                 return None, logs # Fail this Fast Cloud path
                         except requests.exceptions.RequestException as post_err:
                             logs.append(f"  Error during POST request network operation: {post_err}")
-                            return None, logs
+                            return None, logs # Fail this Fast Cloud path
 
                         if page3_url:
                             logs.append(f"Starting polling loop for {page3_url}...")
@@ -359,7 +373,6 @@ def get_gdflix_download_link(start_url):
 
                                 logs.append(f"  Polling: Waiting {wait_time:.1f}s before checking {page3_url}...")
                                 time.sleep(wait_time)
-
                                 poll_landed_url = None
                                 try:
                                     poll_headers = {'Referer': page3_url}
@@ -380,7 +393,7 @@ def get_gdflix_download_link(start_url):
                                             polled_resume_tag = tag
                                             logs.append(f"    Success: Found 'Cloud Resume Download' after polling on {poll_landed_url}!")
                                             break
-
+                                    
                                     if polled_resume_tag:
                                         final_link_href = polled_resume_tag.get('href')
                                         if not final_link_href and polled_resume_tag.name == 'button':
@@ -389,7 +402,7 @@ def get_gdflix_download_link(start_url):
 
                                         if not final_link_href:
                                             logs.append(f"    Error: Found polled '{polled_resume_tag.get_text(strip=True)}' element but no href/action.")
-                                            return None, logs
+                                            return None, logs # Fail this Fast Cloud path
 
                                         final_download_link = urljoin(poll_landed_url, final_link_href)
                                         logs.append(f"Success: Found final Cloud Resume link URL after polling: {final_download_link}")
@@ -402,45 +415,22 @@ def get_gdflix_download_link(start_url):
                                      logs.append(f"  Warning: Error parsing polled page {poll_landed_url or page3_url}: {parse_err}. Will retry.")
 
                             logs.append(f"Error: Link generation timed out after {GENERATION_TIMEOUT}s of polling {page3_url}.")
-                            return None, logs
-                    else:
+                            return None, logs # Fail this Fast Cloud path (timeout)
+                    else: # if generate_tag not found
                         logs.append("Error: Neither 'Cloud Resume Download' nor 'Generate Cloud Link' button/pattern found on the intermediate page.")
                         body_tag_p2 = soup2.find('body')
                         logs.append("--- Intermediate Page Body Snippet (for debugging why buttons were missed) ---")
                         logs.append(str(body_tag_p2)[:1000] + '...' if body_tag_p2 else html_content_p2[:1000] + '...')
                         logs.append("--- End Intermediate Page Body Snippet ---")
-                        return None, logs
+                        return None, logs # Fail this Fast Cloud path
+                # End of Fast Cloud multi-step logic
+        else: # This 'else' corresponds to 'if fast_cloud_link_tag:' (i.e., tag not found)
+            logs.append("Info: 'Fast Cloud Download/DL' button/pattern not found.")
+            # No further fallbacks after this, execution will proceed to the end of the function.
 
-            # --- Fallback: If Fast Cloud button was NOT found on final page (page1) ---
-            # This 'else' corresponds to 'if fast_cloud_link_tag:'
-            else:
-                logs.append("Info: 'Fast Cloud Download' button/pattern not found on final content page. Checking for 'PixeldrainDL'...")
-                pixeldrain_link_tag = None
-                pixeldrain_pattern = re.compile(r'pixeldrain\s*(dl)?', re.IGNORECASE)
-                for tag in possible_tags_p1: # Use the original possible_tags_p1 from the final content page
-                     tag_text = tag.get_text(strip=True)
-                     if pixeldrain_pattern.search(tag_text):
-                        pixeldrain_link_tag = tag
-                        logs.append(f"Success: Found fallback Pixeldrain tag: <{tag.name}> with text '{tag_text}'")
-                        break
-                if pixeldrain_link_tag:
-                     pixeldrain_href = pixeldrain_link_tag.get('href')
-                     if not pixeldrain_href and pixeldrain_link_tag.name == 'button':
-                         parent_form = pixeldrain_link_tag.find_parent('form')
-                         if parent_form: pixeldrain_href = parent_form.get('action')
+        # If execution reaches here, all prioritized search attempts have failed.
+        logs.append("Error: All prioritized search attempts (Pixeldrain, R2, Fast Cloud) failed to yield a download link.")
 
-                     if pixeldrain_href:
-                         pixeldrain_full_url = urljoin(page1_url, pixeldrain_href)
-                         logs.append(f"Success: Found Pixeldrain link URL: {pixeldrain_full_url}")
-                         return pixeldrain_full_url, logs
-                     else:
-                         logs.append(f"Error: Found Pixeldrain element but couldn't get href/action.")
-                         return None, logs
-                else:
-                    logs.append("Error: Neither 'CLOUD DOWNLOAD [R2]', 'Fast Cloud Download/DL' nor 'Pixeldrain(DL)' link/button found on the final content page.")
-                    return None, logs
-
-    # --- Exception Handling ---
     except requests.exceptions.Timeout as e:
         logs.append(f"Error: Request timed out: {e}")
         return None, logs
@@ -456,8 +446,7 @@ def get_gdflix_download_link(start_url):
         logs.append(f"FATAL: An unexpected error occurred in get_gdflix_download_link: {e}\n{traceback.format_exc()}")
         return None, logs
 
-    # Fallback if no successful path found
-    logs.append("Error: Reached end of function without finding a download link.")
+    # Fallback if no successful path found after all attempts
     return None, logs
 
 
@@ -466,7 +455,7 @@ def get_gdflix_download_link(start_url):
 def gdflix_bypass_api():
     script_logs = []
     result = {"success": False, "error": "Request processing failed", "finalUrl": None, "logs": script_logs}
-    status_code = 500 # Default
+    status_code = 500 
 
     try:
         gdflix_url = None
@@ -503,11 +492,11 @@ def gdflix_bypass_api():
             result["success"] = True
             result["finalUrl"] = final_download_link
             result["error"] = None
-            status_code = 200 # OK
+            status_code = 200
         else:
             script_logs.append("Bypass process failed to find the final download link.")
             result["success"] = False
-            failure_indicators = ["Error:", "FATAL:", "FAILED", "timed out", "neither", "blocked", "exceeded maximum"]
+            failure_indicators = ["Error:", "FATAL:", "FAILED", "timed out", "neither", "blocked", "exceeded maximum", "all prioritized search attempts"]
             extracted_error = "GDFLIX Extraction Failed (Check logs for details)"
             timeout_occurred = False
 
@@ -519,7 +508,7 @@ def gdflix_bypass_api():
                     timeout_occurred = True
                     break
                 elif any(indicator.lower() in log_entry_lower for indicator in failure_indicators):
-                    if not last_error_log: # Prioritize timeout, but take first other error if no timeout
+                    if not last_error_log:
                          last_error_log = log_entry
             
             if timeout_occurred:
@@ -536,12 +525,13 @@ def gdflix_bypass_api():
                        extracted_error = "Failed to initiate link generation process."
                 elif "Failed to retrieve final page content" in extracted_error:
                      extracted_error = "Could not load initial page content."
-                elif "Neither 'CLOUD DOWNLOAD [R2]', 'Fast Cloud Download/DL' nor 'Pixeldrain(DL)'" in extracted_error: # Updated error
+                elif "All prioritized search attempts" in extracted_error or \
+                     "Neither 'CLOUD DOWNLOAD [R2]', 'Fast Cloud Download/DL' nor 'Pixeldrain(DL)'" in extracted_error: # Keep old check for safety
                     extracted_error = "No supported download buttons found on the page."
 
 
-            result["error"] = extracted_error[:250]
-            status_code = 200
+            result["error"] = extracted_error[:250] 
+            status_code = 200 
 
     except Exception as e:
         print(f"FATAL API Handler Error: {e}", file=sys.stderr)
