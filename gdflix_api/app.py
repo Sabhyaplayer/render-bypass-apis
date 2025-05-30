@@ -192,18 +192,17 @@ def get_gdflix_download_link(start_url):
                     logs.append(f"    Extracted href from parent form action: {fast_cloud_href}")
 
             if not fast_cloud_href:
-                logs.append(f"  Error: Found '{fast_cloud_link_tag.get_text(strip=True)}' (Fast Cloud) element but couldn't get href/action. All priorities exhausted for direct links.")
-                # This means this path failed, so it will fall through to the final error message at the end of the function.
+                logs.append(f"  Error: Found '{fast_cloud_link_tag.get_text(strip=True)}' (Fast Cloud) element but couldn't get href/action. Trying next priority.")
             else:
                 # --- Start of Fast Cloud multi-step logic ---
                 intermediate_url = urljoin(page1_url, fast_cloud_href)
                 logs.append(f"Found intermediate link URL (from Fast Cloud button): {intermediate_url}")
-                time.sleep(1) # Small delay before hitting next page
+                time.sleep(1) 
 
                 logs.append(f"Fetching intermediate page URL (potentially with Generate button): {intermediate_url}")
                 fetch_headers_p2 = {'Referer': page1_url}
                 response_intermediate = session.get(intermediate_url, timeout=REQUEST_TIMEOUT, headers=fetch_headers_p2, allow_redirects=True)
-                response_intermediate.raise_for_status() # Handled by outer try-except for HTTP/Request errors
+                response_intermediate.raise_for_status()
                 page2_url = response_intermediate.url 
                 html_content_p2 = response_intermediate.text
                 logs.append(f"Landed on intermediate page: {page2_url} (Status: {response_intermediate.status_code})")
@@ -236,7 +235,7 @@ def get_gdflix_download_link(start_url):
 
                     if not final_link_href:
                         logs.append(f"Error: Found '{resume_link_tag.get_text(strip=True)}' but no href/action.")
-                        return None, logs # Fail this Fast Cloud path
+                        return None, logs 
 
                     final_download_link = urljoin(page2_url, final_link_href)
                     logs.append(f"Success: Found final Cloud Resume link URL directly: {final_download_link}")
@@ -274,7 +273,7 @@ def get_gdflix_download_link(start_url):
                                     logs.append(f"    Extracted hidden input: name='{name}', value='{value}'")
                             btn_name = generate_tag.get('name')
                             btn_value = generate_tag.get('value')
-                            if btn_name and generate_tag.name == 'button': # only add button if it has name
+                            if btn_name and generate_tag.name == 'button': 
                                  post_data[btn_name] = btn_value if btn_value is not None else ''
                                  logs.append(f"    Added button data: name='{btn_name}', value='{btn_value}'")
 
@@ -357,10 +356,10 @@ def get_gdflix_download_link(start_url):
                                  try:
                                      if post_response.status_code != 200: post_response.raise_for_status()
                                  except requests.exceptions.HTTPError as http_err: logs.append(f"  HTTP Error details: {http_err}")
-                                 return None, logs # Fail this Fast Cloud path
+                                 return None, logs 
                         except requests.exceptions.RequestException as post_err:
                             logs.append(f"  Error during POST request network operation: {post_err}")
-                            return None, logs # Fail this Fast Cloud path
+                            return None, logs 
 
                         if page3_url:
                             logs.append(f"Starting polling loop for {page3_url}...")
@@ -375,7 +374,7 @@ def get_gdflix_download_link(start_url):
                                 time.sleep(wait_time)
                                 poll_landed_url = None
                                 try:
-                                    poll_headers = {'Referer': page3_url}
+                                    poll_headers = {'Referer': page3_url} # Use page3_url as referer for polling requests
                                     poll_response = session.get(page3_url, timeout=REQUEST_TIMEOUT, headers=poll_headers, allow_redirects=True)
                                     poll_landed_url = poll_response.url
                                     poll_status = poll_response.status_code
@@ -389,7 +388,7 @@ def get_gdflix_download_link(start_url):
                                     poll_soup = BeautifulSoup(poll_html, PARSER)
                                     polled_resume_tag = None
                                     for tag in poll_soup.find_all(['a', 'button']):
-                                        if resume_text_pattern.search(tag.get_text(strip=True)):
+                                        if resume_text_pattern.search(tag.get_text(strip=True)): # Re-use resume_text_pattern
                                             polled_resume_tag = tag
                                             logs.append(f"    Success: Found 'Cloud Resume Download' after polling on {poll_landed_url}!")
                                             break
@@ -402,7 +401,7 @@ def get_gdflix_download_link(start_url):
 
                                         if not final_link_href:
                                             logs.append(f"    Error: Found polled '{polled_resume_tag.get_text(strip=True)}' element but no href/action.")
-                                            return None, logs # Fail this Fast Cloud path
+                                            return None, logs
 
                                         final_download_link = urljoin(poll_landed_url, final_link_href)
                                         logs.append(f"Success: Found final Cloud Resume link URL after polling: {final_download_link}")
@@ -415,21 +414,201 @@ def get_gdflix_download_link(start_url):
                                      logs.append(f"  Warning: Error parsing polled page {poll_landed_url or page3_url}: {parse_err}. Will retry.")
 
                             logs.append(f"Error: Link generation timed out after {GENERATION_TIMEOUT}s of polling {page3_url}.")
-                            return None, logs # Fail this Fast Cloud path (timeout)
-                    else: # if generate_tag not found
+                            return None, logs 
+                    else: 
                         logs.append("Error: Neither 'Cloud Resume Download' nor 'Generate Cloud Link' button/pattern found on the intermediate page.")
                         body_tag_p2 = soup2.find('body')
                         logs.append("--- Intermediate Page Body Snippet (for debugging why buttons were missed) ---")
                         logs.append(str(body_tag_p2)[:1000] + '...' if body_tag_p2 else html_content_p2[:1000] + '...')
                         logs.append("--- End Intermediate Page Body Snippet ---")
-                        return None, logs # Fail this Fast Cloud path
-                # End of Fast Cloud multi-step logic
-        else: # This 'else' corresponds to 'if fast_cloud_link_tag:' (i.e., tag not found)
-            logs.append("Info: 'Fast Cloud Download/DL' button/pattern not found.")
-            # No further fallbacks after this, execution will proceed to the end of the function.
+                        return None, logs 
+        else: 
+            logs.append("Info: 'Fast Cloud Download/DL' button/pattern not found. Trying next priority.")
+
+        # --- PRIORITY 4: Look for "DRIVEBOT" ---
+        logs.append("Searching for 'DRIVEBOT' button text pattern on final content page (Priority 4)...")
+        drivebot_initial_tag = None
+        # More generic pattern to catch "DRIVEBOT [MIRROR]" or similar
+        drivebot_initial_pattern = re.compile(r'DRIVEBOT', re.IGNORECASE)
+        for tag in possible_tags_p1: # possible_tags_p1 are from the initial content page (page1_url)
+            tag_text = tag.get_text(strip=True)
+            if drivebot_initial_pattern.search(tag_text):
+                drivebot_initial_tag = tag
+                logs.append(f"  Success: Found potential DRIVEBOT tag: <{tag.name}> with text '{tag_text}'")
+                break
+
+        if drivebot_initial_tag:
+            drivebot_initial_href = drivebot_initial_tag.get('href')
+            if not drivebot_initial_href and drivebot_initial_tag.name == 'button':
+                parent_form = drivebot_initial_tag.find_parent('form')
+                if parent_form:
+                    drivebot_initial_href = parent_form.get('action')
+                    logs.append(f"    Extracted href from parent form action: {drivebot_initial_href}")
+
+            if drivebot_initial_href:
+                drivebot_step1_url = urljoin(page1_url, drivebot_initial_href)
+                logs.append(f"  Following DRIVEBOT link to (Index Server Page): {drivebot_step1_url}")
+                time.sleep(1)
+
+                try:
+                    response_drivebot_s1 = session.get(drivebot_step1_url, timeout=REQUEST_TIMEOUT, headers={'Referer': page1_url}, allow_redirects=True)
+                    response_drivebot_s1.raise_for_status()
+                    page2_drivebot_url = response_drivebot_s1.url
+                    html_content_p2_drivebot = response_drivebot_s1.text
+                    logs.append(f"  Landed on DRIVEBOT Index Server page: {page2_drivebot_url} (Status: {response_drivebot_s1.status_code})")
+                    # logs.append(f"  DRIVEBOT Index Server Page HTML: {html_content_p2_drivebot[:1000]}") # Debug
+
+                    soup_p2_drivebot = BeautifulSoup(html_content_p2_drivebot, PARSER)
+                    drivebot_server_choice_tag = None
+                    # Prioritize "DRIVEBOT 1 [R1]" or "DRIVEBOT 1"
+                    drivebot_server_pattern = re.compile(r'DRIVEBOT\s*1(?:\s*\[R1\])?', re.IGNORECASE)
+                    # Fallback if specific "DRIVEBOT 1" not found, look for any "DRIVEBOT" button/link
+                    generic_drivebot_server_pattern = re.compile(r'DRIVEBOT', re.IGNORECASE) 
+                    
+                    possible_server_tags = soup_p2_drivebot.find_all(['a', 'button'])
+                    for tag in possible_server_tags:
+                        tag_text = tag.get_text(strip=True)
+                        if drivebot_server_pattern.search(tag_text):
+                            drivebot_server_choice_tag = tag
+                            logs.append(f"    Found preferred DRIVEBOT 1 server choice: <{tag.name}> '{tag_text}'")
+                            break
+                    
+                    if not drivebot_server_choice_tag:
+                        logs.append("    Preferred DRIVEBOT 1 not found, looking for any DRIVEBOT server link on Index Page.")
+                        for tag in possible_server_tags:
+                            tag_text = tag.get_text(strip=True)
+                            if generic_drivebot_server_pattern.search(tag_text):
+                                drivebot_server_choice_tag = tag
+                                logs.append(f"    Found generic DRIVEBOT server choice: <{tag.name}> '{tag_text}'")
+                                break
+                    
+                    if drivebot_server_choice_tag:
+                        drivebot_server_href = drivebot_server_choice_tag.get('href')
+                        if not drivebot_server_href and drivebot_server_choice_tag.name == 'button':
+                            parent_form = drivebot_server_choice_tag.find_parent('form')
+                            if parent_form: drivebot_server_href = parent_form.get('action')
+                        
+                        if drivebot_server_href:
+                            drivebot_step2_url = urljoin(page2_drivebot_url, drivebot_server_href)
+                            logs.append(f"    Following DRIVEBOT server choice link to (Generate Link Page): {drivebot_step2_url}")
+                            time.sleep(1)
+
+                            response_drivebot_s2 = session.get(drivebot_step2_url, timeout=REQUEST_TIMEOUT, headers={'Referer': page2_drivebot_url}, allow_redirects=True)
+                            response_drivebot_s2.raise_for_status()
+                            page3_drivebot_url = response_drivebot_s2.url
+                            html_content_p3_drivebot = response_drivebot_s2.text
+                            logs.append(f"    Landed on DRIVEBOT Generate Link page: {page3_drivebot_url} (Status: {response_drivebot_s2.status_code})")
+                            # logs.append(f"    DRIVEBOT Generate Link Page HTML: {html_content_p3_drivebot[:1000]}") # Debug
+
+                            soup_p3_drivebot = BeautifulSoup(html_content_p3_drivebot, PARSER)
+                            generate_link_button = None
+                            generate_link_pattern = re.compile(r'Generate Link', re.IGNORECASE)
+                            for tag in soup_p3_drivebot.find_all(['a', 'button']): # Check both <a> and <button>
+                                if generate_link_pattern.search(tag.get_text(strip=True)):
+                                    generate_link_button = tag
+                                    logs.append(f"      Found 'Generate Link' element: <{tag.name}> '{tag.get_text(strip=True)}'")
+                                    break
+                            
+                            if generate_link_button:
+                                post_url_generate = page3_drivebot_url 
+                                post_data_generate = {}
+                                http_method_generate = 'POST' # Default to POST
+
+                                parent_form_generate = generate_link_button.find_parent('form')
+                                if parent_form_generate:
+                                    logs.append("      'Generate Link' element is in a form. Extracting details.")
+                                    form_action = parent_form_generate.get('action')
+                                    if form_action:
+                                        post_url_generate = urljoin(page3_drivebot_url, form_action)
+                                    logs.append(f"        Form action URL: {post_url_generate}")
+                                    
+                                    current_method = parent_form_generate.get('method', 'POST').upper()
+                                    if current_method == 'GET':
+                                        http_method_generate = 'GET'
+                                    logs.append(f"        Form method: {http_method_generate}")
+
+                                    for input_tag in parent_form_generate.find_all('input'):
+                                        name = input_tag.get('name')
+                                        value = input_tag.get('value')
+                                        if name:
+                                            post_data_generate[name] = value if value is not None else ''
+                                            logs.append(f"          Extracted form input: name='{name}', value='{value}'")
+                                    
+                                    # Add button's name/value if it's a submit input/button and has a name
+                                    if generate_link_button.name in ['input', 'button'] and generate_link_button.get('name'):
+                                        btn_name = generate_link_button.get('name')
+                                        btn_value = generate_link_button.get('value', '') # Default to empty string if no value
+                                        post_data_generate[btn_name] = btn_value
+                                        logs.append(f"          Added button data: name='{btn_name}', value='{btn_value}'")
+                                
+                                elif generate_link_button.name == 'a' and generate_link_button.get('href') and generate_link_button.get('href') not in ['#', 'javascript:void(0);']:
+                                    post_url_generate = urljoin(page3_drivebot_url, generate_link_button.get('href'))
+                                    http_method_generate = 'GET' # Anchor tags imply GET
+                                    logs.append(f"      'Generate Link' is an <a> tag with href. Using GET to: {post_url_generate}")
+                                else:
+                                    logs.append("      'Generate Link' element not in a form and not a direct <a> link. Assuming POST to current page or requires JS analysis for specific endpoint/data.")
+                                    # This is a fallback, might need specific data if it's pure JS AJAX
+
+                                generate_headers = {
+                                    'Referer': page3_drivebot_url,
+                                    'X-Requested-With': 'XMLHttpRequest', # Common for AJAX, send it anyway
+                                    'Accept': '*/*' # Be general for Accept, server might send JSON or HTML
+                                }
+                                
+                                response_generate = None
+                                if http_method_generate == 'POST':
+                                    logs.append(f"      Sending POST request to: {post_url_generate} with data: {post_data_generate}")
+                                    response_generate = session.post(post_url_generate, data=post_data_generate, headers=generate_headers, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+                                else: # GET
+                                    logs.append(f"      Sending GET request to: {post_url_generate} with params: {post_data_generate}")
+                                    response_generate = session.get(post_url_generate, params=post_data_generate, headers=generate_headers, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+
+                                response_generate.raise_for_status()
+                                page4_drivebot_url = response_generate.url # Could be same as page3_drivebot_url if AJAX updated DOM
+                                html_content_p4_drivebot = response_generate.text
+                                logs.append(f"      Landed on/Received content from 'Generate Link' action: {page4_drivebot_url} (Status: {response_generate.status_code})")
+                                # logs.append(f"      DRIVEBOT Page 4 HTML (after generate): {html_content_p4_drivebot[:2000]}") # Debug
+
+                                soup_p4_drivebot = BeautifulSoup(html_content_p4_drivebot, PARSER)
+                                final_dl_link = None
+                                
+                                # Try to find link in an input field's value attribute
+                                link_input_tag = soup_p4_drivebot.find('input', {'value': re.compile(r'https?://[^\s"\']*\.gdindex\.lol[^\s"\']*')})
+                                if link_input_tag and link_input_tag.get('value'):
+                                    final_dl_link = link_input_tag.get('value')
+                                    logs.append(f"Success: Found final Drivebot download link in input field: {final_dl_link}")
+                                
+                                # If not in input, try to find in an <a> tag's href (e.g., "Watch Online" or a download button)
+                                if not final_dl_link:
+                                    link_anchor_tag = soup_p4_drivebot.find('a', {'href': re.compile(r'https?://[^\s"\']*\.gdindex\.lol[^\s"\']*')})
+                                    if link_anchor_tag and link_anchor_tag.get('href'):
+                                        final_dl_link = link_anchor_tag.get('href')
+                                        logs.append(f"Success: Found final Drivebot download link in <a> tag: {final_dl_link}")
+
+                                if final_dl_link:
+                                    return final_dl_link, logs # SUCCESS for Drivebot path
+                                else:
+                                    logs.append("        Error: Could not find the final gdindex.lol link in the response after 'Generate Link' action.")
+                                    logs.append(f"--- Drivebot Page 4 HTML Snippet (link not found) ---")
+                                    logs.append(html_content_p4_drivebot[:2000] + ('...' if len(html_content_p4_drivebot) > 2000 else ''))
+                                    logs.append(f"--- End Drivebot Page 4 HTML Snippet ---")
+                            else:
+                                logs.append("    Error: 'Generate Link' button/element not found on Drivebot page 3.")
+                        else:
+                            logs.append("  Error: Could not find href/action for DRIVEBOT server choice on Index page.")
+                    else:
+                        logs.append("  Error: Could not find a DRIVEBOT server choice button/link on Index page.")
+                except requests.exceptions.RequestException as e_db_process:
+                    logs.append(f"  Error during DRIVEBOT multi-step process (current step URL might be {page2_drivebot_url if 'page2_drivebot_url' in locals() else drivebot_step1_url if 'drivebot_step1_url' in locals() else 'unknown'}): {e_db_process}")
+                # If any Drivebot step fails and doesn't return, it will fall through.
+            else:
+                logs.append("  Info: Found DRIVEBOT element on initial page but couldn't get href/action. Trying next priority (or ending).")
+        else:
+            logs.append("Info: 'DRIVEBOT' button/pattern not found on initial page.")
+        # End of DRIVEBOT path
 
         # If execution reaches here, all prioritized search attempts have failed.
-        logs.append("Error: All prioritized search attempts (Pixeldrain, R2, Fast Cloud) failed to yield a download link.")
+        logs.append("Error: All prioritized search attempts (Pixeldrain, R2, Fast Cloud, Drivebot) failed to yield a download link.")
 
     except requests.exceptions.Timeout as e:
         logs.append(f"Error: Request timed out: {e}")
@@ -496,42 +675,45 @@ def gdflix_bypass_api():
         else:
             script_logs.append("Bypass process failed to find the final download link.")
             result["success"] = False
-            failure_indicators = ["Error:", "FATAL:", "FAILED", "timed out", "neither", "blocked", "exceeded maximum", "all prioritized search attempts"]
+            # Extended failure indicators to include Drivebot specific messages if needed
+            failure_indicators = ["Error:", "FATAL:", "FAILED", "timed out", "neither", "blocked", "exceeded maximum", "all prioritized search attempts", "could not find the final gdindex.lol link"]
             extracted_error = "GDFLIX Extraction Failed (Check logs for details)"
             timeout_occurred = False
 
             last_error_log = ""
             for log_entry in reversed(script_logs):
                 log_entry_lower = log_entry.lower()
-                if "link generation timed out" in log_entry_lower:
+                if "link generation timed out" in log_entry_lower: # Specific to FastCloud polling
                     last_error_log = log_entry
                     timeout_occurred = True
                     break
                 elif any(indicator.lower() in log_entry_lower for indicator in failure_indicators):
-                    if not last_error_log:
+                    if not last_error_log: # Prioritize more specific errors first
                          last_error_log = log_entry
             
-            if timeout_occurred:
-                extracted_error = "Link is generating, please try again after a few minutes."
+            if timeout_occurred: # From FastCloud
+                extracted_error = "Link generation (FastCloud) timed out, please try again."
                 script_logs.append(f"API Info: Reporting timeout as '{extracted_error}'")
             elif last_error_log:
                 parts = re.split(r'(?:Error|FATAL|Info|Warning):\s*', last_error_log, maxsplit=1, flags=re.IGNORECASE)
                 extracted_error = (parts[-1] if len(parts) > 1 else last_error_log).strip()
                 if "Neither 'Cloud Resume Download' nor 'Generate Cloud Link'" in extracted_error:
-                     extracted_error = "Could not find required buttons on intermediate page."
+                     extracted_error = "Could not find required buttons on intermediate page (FastCloud)."
                 elif "Exceeded maximum redirect hops" in extracted_error:
                        extracted_error = "Too many redirects encountered."
-                elif "Failed to obtain a valid polling URL" in extracted_error:
-                       extracted_error = "Failed to initiate link generation process."
+                elif "Failed to obtain a valid polling URL" in extracted_error: # FastCloud
+                       extracted_error = "Failed to initiate link generation process (FastCloud)."
                 elif "Failed to retrieve final page content" in extracted_error:
                      extracted_error = "Could not load initial page content."
-                elif "All prioritized search attempts" in extracted_error or \
-                     "Neither 'CLOUD DOWNLOAD [R2]', 'Fast Cloud Download/DL' nor 'Pixeldrain(DL)'" in extracted_error: # Keep old check for safety
+                elif "could not find the final gdindex.lol link" in extracted_error.lower(): # Drivebot specific
+                    extracted_error = "Failed to extract link after Drivebot generation step."
+                elif "'Generate Link' button/element not found on Drivebot page 3" in extracted_error: # Drivebot specific
+                    extracted_error = "Drivebot 'Generate Link' button missing."
+                elif "All prioritized search attempts" in extracted_error:
                     extracted_error = "No supported download buttons found on the page."
 
-
             result["error"] = extracted_error[:250] 
-            status_code = 200 
+            status_code = 200 # Still 200 for failed extractions, as per original logic
 
     except Exception as e:
         print(f"FATAL API Handler Error: {e}", file=sys.stderr)
@@ -543,7 +725,10 @@ def gdflix_bypass_api():
 
     finally:
         result["logs"] = script_logs
-        return jsonify(result), status_code
+        response = make_response(jsonify(result), status_code)
+        # Add a custom header for debugging if needed, e.g., to see full logs easily
+        # response.headers['X-Script-Logs-Length'] = str(len(json.dumps(script_logs)))
+        return response
 
 # --- Run Flask App ---
 if __name__ == '__main__':
