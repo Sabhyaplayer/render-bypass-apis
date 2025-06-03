@@ -9,6 +9,8 @@ import sys
 import json
 import os
 from flask import Flask, request, jsonify, make_response # Import Flask components
+import threading # For self-ping
+import logging # For better logging
 
 # Try importing lxml, fall back to html.parser if not installed
 try:
@@ -24,6 +26,20 @@ except ImportError:
 
 # --- Flask App Initialization ---
 app = Flask(__name__)
+
+# --- Basic Logging Configuration ---
+# Configure logging to see messages from self-pinger and app
+if not app.debug: # Avoid duplicate handlers if Flask's debug mode is on
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    stream_handler.setFormatter(formatter)
+
+    app.logger.addHandler(stream_handler)
+    app.logger.setLevel(logging.INFO)
+    # Also configure root logger if other libraries use it
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
 
 # --- Configuration (Copied from your script) ---
 DEFAULT_HEADERS = {
@@ -43,6 +59,11 @@ DRIVE_INTERMEDIATE_DOMAINS = [
     'gamerxyt.com', 'adf.ly', 'linkvertise.com', 'tinyurl.com',
     'cdn.ampproject.org', 'bloggingvector.shop', 'newssongs.co.in',
 ]
+
+# --- Self-Ping Configuration ---
+SELF_PING_INTERVAL_SECONDS = 10 * 60  # 10 minutes
+PING_REQUEST_TIMEOUT = 20 # Timeout for the self-ping request itself
+
 
 # --- Helper Functions (Copied from your script) ---
 def drive_is_intermediate_link(url):
@@ -372,6 +393,7 @@ def hubcloud_bypass_api():
         result = {"success": False, "error": "Request processing failed", "finalUrl": None, "logs": logs}
         hubcloud_url = None
         final_download_link = None
+        status_code = 500 # Default status code
 
         try:
             # Get JSON data from the request
@@ -384,20 +406,23 @@ def hubcloud_bypass_api():
             except Exception as e:
                 logs.append(f"Error: Could not parse JSON request body: {e}")
                 result["error"] = "Invalid or missing JSON in request body"
-                return _corsify_actual_response(jsonify(result)), 400
+                status_code = 400
+                return _corsify_actual_response(jsonify(result)), status_code
 
             # Validate URL
             if not hubcloud_url or not isinstance(hubcloud_url, str):
                 logs.append("Error: hubcloudUrl missing or invalid in request.")
                 result["error"] = "Missing or invalid hubcloudUrl in request body"
-                return _corsify_actual_response(jsonify(result)), 400
+                status_code = 400
+                return _corsify_actual_response(jsonify(result)), status_code
 
             logs.append(f"Processing URL: {hubcloud_url}")
             parsed_start_url = urlparse(hubcloud_url)
             if not parsed_start_url.scheme or not parsed_start_url.netloc:
                  logs.append(f"Error: Invalid URL format: {hubcloud_url}")
                  result["error"] = f"Invalid URL format provided: {hubcloud_url}"
-                 return _corsify_actual_response(jsonify(result)), 400
+                 status_code = 400
+                 return _corsify_actual_response(jsonify(result)), status_code
 
             # Perform Scraping
             session = requests.Session()
@@ -415,7 +440,7 @@ def hubcloud_bypass_api():
                  error_msg = f"Unknown HubCloud URL type (path: {parsed_start_url.path})"
                  logs.append(f"Error: {error_msg}")
                  result["error"] = error_msg
-                 # Keep final_download_link as None
+                 # final_download_link remains None, status_code will be 500 if not set otherwise
 
             # Prepare Response
             if final_download_link:
@@ -425,36 +450,81 @@ def hubcloud_bypass_api():
                 status_code = 200
             else:
                 result["success"] = False
-                # Try extracting specific error if not already set
+                # Try extracting specific error if not already set and no other error status was set
                 if result.get("error", "Request processing failed") == "Request processing failed":
                      failure_indicators = ["Error:", "FATAL ERROR", "FAILED", "Could not find", "timed out"]
-                     # Look backwards through logs for the first error indicator
                      extracted_error = "Extraction Failed (Check logs)"
                      for log_entry in reversed(logs):
                         if any(indicator in log_entry for indicator in failure_indicators):
-                             extracted_error = log_entry.split(":", 1)[-1].strip()
+                             # More careful splitting, ensure there's a colon before splitting
+                             parts = log_entry.split(":", 1)
+                             extracted_error = parts[-1].strip() if len(parts) > 1 else log_entry.strip()
                              break
                      result["error"] = extracted_error[:150] # Limit error length
-                status_code = 500 # Internal Server Error for backend failures
+                # If it's a known failure type (like unknown URL), it might have set 400 already.
+                # If it's a scraping failure, 500 is appropriate.
+                # We let the status_code remain as 500 if not explicitly changed to 200 or 400.
 
         except Exception as e:
-            # Catch unexpected errors in the handler itself
-            print(f"FATAL Handler Error: {e}", file=sys.stderr)
-            logs.append(f"FATAL Handler Error: {e}\n{traceback.format_exc()}")
+            app.logger.error(f"FATAL API Handler Error: {e}", exc_info=True)
+            logs.append(f"FATAL API Handler Error: An unexpected server error occurred.")
             result["success"] = False
             result["error"] = "Internal server error processing request."
-            status_code = 500
+            status_code = 500 # Ensure status_code is 500 for unexpected exceptions
 
         finally:
-            # Ensure logs are included and send response
             result["logs"] = logs
             return _corsify_actual_response(jsonify(result)), status_code
     else:
-        # Method Not Allowed for other request types like GET
         return jsonify({"error": "Method Not Allowed"}), 405
 
-# --- Run Flask App (for local testing) ---
-# Render will use gunicorn, not this block
+# --- Self-Ping Endpoint ---
+@app.route('/ping', methods=['GET'])
+def ping_service():
+    app.logger.info("HubCloud API Ping endpoint called successfully.")
+    return "pong", 200
+
+# --- Self-Ping Background Task ---
+def self_ping_task():
+    """
+    Periodically pings the application's own /ping endpoint to keep it alive on free tiers.
+    """
+    render_external_url = os.environ.get("RENDER_EXTERNAL_URL")
+    if not render_external_url:
+        app.logger.warning("RENDER_EXTERNAL_URL environment variable not found. HubCloud self-ping task will not run.")
+        return
+
+    ping_url = f"{render_external_url}/ping"
+    app.logger.info(f"HubCloud self-ping task started. Will ping {ping_url} every {SELF_PING_INTERVAL_SECONDS} seconds.")
+
+    while True:
+        time.sleep(SELF_PING_INTERVAL_SECONDS) # Sleep for the interval first
+        try:
+            app.logger.info(f"HubCloud self-ping: Sending GET request to {ping_url}")
+            response = requests.get(ping_url, timeout=PING_REQUEST_TIMEOUT)
+            if response.status_code == 200:
+                app.logger.info(f"HubCloud self-ping successful (status {response.status_code}).")
+            else:
+                app.logger.warning(f"HubCloud self-ping to {ping_url} received non-200 status: {response.status_code}")
+        except requests.exceptions.Timeout:
+            app.logger.warning(f"HubCloud self-ping to {ping_url} timed out after {PING_REQUEST_TIMEOUT}s.")
+        except requests.exceptions.RequestException as e:
+            app.logger.error(f"HubCloud self-ping to {ping_url} failed: {e}")
+        except Exception as e:
+            app.logger.error(f"Unexpected error in HubCloud self_ping_task: {e}", exc_info=True)
+
+
+# --- Run Flask App ---
 if __name__ == '__main__':
-    # Port 5000 is common for local dev, Render uses its own port mapping
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5002)) # Changed default port to avoid conflict if running both locally
+
+    # Start the self-ping thread only if RENDER_EXTERNAL_URL is set
+    if os.environ.get("RENDER_EXTERNAL_URL"):
+        ping_thread = threading.Thread(target=self_ping_task, daemon=True)
+        ping_thread.start()
+        app.logger.info("HubCloud self-ping thread initiated.")
+    else:
+        app.logger.info("HubCloud self-ping not started (RENDER_EXTERNAL_URL not found - likely local development).")
+
+    app.logger.info(f"Starting HubCloud Flask server on host 0.0.0.0, port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False) # Changed debug to False for consistency with other script
