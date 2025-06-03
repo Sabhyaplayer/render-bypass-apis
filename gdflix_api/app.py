@@ -12,6 +12,8 @@ import sys
 import os # Added for os.environ.get
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS # Import CORS
+import threading # For self-ping
+import logging # For better logging
 
 # Try importing lxml, fall back to html.parser if not installed
 try:
@@ -27,19 +29,35 @@ app = Flask(__name__)
 # --- CORS Configuration ---
 CORS(app)
 
+# --- Basic Logging Configuration ---
+if not app.debug: 
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    stream_handler.setFormatter(formatter)
+    
+    app.logger.addHandler(stream_handler)
+    app.logger.setLevel(logging.INFO)
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
 # --- Configuration ---
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': 'https://google.com' # Generic referer
+    'Referer': 'https://google.com' 
 }
-GENERATION_TIMEOUT = 40 # Seconds for polling
-POLL_INTERVAL = 5 # Seconds between poll checks
-REQUEST_TIMEOUT = 30 # Seconds for general HTTP requests
-MAX_REDIRECT_HOPS = 5 # Max secondary HTML/JS redirects to follow
+GENERATION_TIMEOUT = 40 
+POLL_INTERVAL = 5 
+REQUEST_TIMEOUT = 30 
+MAX_REDIRECT_HOPS = 5 
 
-# --- Core GDFLIX Bypass Function (with Redirect Loop and Fixed Generate Logic) ---
+# --- Self-Ping Configuration ---
+# MODIFIED LINE: Changed from 10 * 60 to 48
+SELF_PING_INTERVAL_SECONDS = 48  # 48 seconds
+PING_REQUEST_TIMEOUT = 20 
+
+# --- Core GDFLIX Bypass Function ( ... rest of your function ... ) ---
 def get_gdflix_download_link(start_url):
     session = requests.Session()
     session.headers.update(HEADERS)
@@ -460,7 +478,7 @@ def get_gdflix_download_link(start_url):
                     response_drivebot_s1 = session.get(drivebot_step1_url, timeout=REQUEST_TIMEOUT, headers={'Referer': page1_url}, allow_redirects=True)
                     response_drivebot_s1.raise_for_status()
                     page2_drivebot_url = response_drivebot_s1.url 
-                    html_content_p2_drivebot = response_drivebot_s1.text # Store for potential debugging
+                    html_content_p2_drivebot = response_drivebot_s1.text 
                     logs.append(f"  Landed on DRIVEBOT Index Server page: {page2_drivebot_url} (Status: {response_drivebot_s1.status_code})")
                     
                     soup_p2_drivebot = BeautifulSoup(html_content_p2_drivebot, PARSER)
@@ -518,8 +536,7 @@ def get_gdflix_download_link(start_url):
                                     logs.append(f"        Added button data: name='{btn_name}', value='{btn_value}'")
                             else:
                                 logs.append(f"    Error: DRIVEBOT server choice <{drivebot_server_choice_tag.name}> found, but not within a <form>. Cannot determine action.")
-                                # +++ DEBUGGING LINE ADDED HERE +++
-                                if html_content_p2_drivebot: # Check if HTML was captured
+                                if html_content_p2_drivebot: 
                                     logs.append(f"--- BEGIN HTML of DRIVEBOT Index Server Page ({page2_drivebot_url}) for missing form ---")
                                     logs.append(html_content_p2_drivebot) 
                                     logs.append(f"--- END HTML of DRIVEBOT Index Server Page ---")
@@ -547,7 +564,7 @@ def get_gdflix_download_link(start_url):
                             
                             response_drivebot_s2.raise_for_status()
                             page3_drivebot_url = response_drivebot_s2.url 
-                            html_content_p3_drivebot = response_drivebot_s2.text # Store for potential debugging
+                            html_content_p3_drivebot = response_drivebot_s2.text 
                             logs.append(f"    Landed on DRIVEBOT Generate Link page: {page3_drivebot_url} (Status: {response_drivebot_s2.status_code})")
                             
                             soup_p3_drivebot = BeautifulSoup(html_content_p3_drivebot, PARSER)
@@ -669,7 +686,7 @@ def get_gdflix_download_link(start_url):
                 logs.append("  Info: Found DRIVEBOT element on initial page but couldn't get href/action. Trying next priority (or ending).")
         else:
             logs.append("Info: 'DRIVEBOT' button/pattern not found on initial page.")
-        # End of DRIVEBOT path
+        
 
         logs.append("Error: All prioritized search attempts (Pixeldrain, R2, Fast Cloud, Drivebot) failed to yield a download link.")
 
@@ -691,7 +708,7 @@ def get_gdflix_download_link(start_url):
     return None, logs
 
 
-# --- Flask API Endpoint ---
+# --- Flask API Endpoint ( ... rest of your API endpoint ... ) ---
 @app.route('/api/gdflix', methods=['POST'])
 def gdflix_bypass_api():
     script_logs = []
@@ -744,7 +761,7 @@ def gdflix_bypass_api():
                 "'Generate Link' button/element not found",
                 "Could not determine next URL or method for DRIVEBOT server choice",
                 "Could not find a DRIVEBOT server choice button/link",
-                "DRIVEBOT server choice <.+> found, but not within a <form>" # New specific indicator
+                "DRIVEBOT server choice <.+> found, but not within a <form>" 
             ]
             extracted_error = "GDFLIX Extraction Failed (Check logs for details)"
             timeout_occurred = False 
@@ -757,7 +774,6 @@ def gdflix_bypass_api():
                     timeout_occurred = True
                     break 
                 
-                # Use regex for the new indicator to make it more robust
                 if any( (indicator.startswith("DRIVEBOT server choice <.+>") and re.search(indicator, log_entry, re.IGNORECASE)) or 
                          (not indicator.startswith("DRIVEBOT server choice <.+>") and indicator.lower() in log_entry_lower)
                          for indicator in failure_indicators):
@@ -784,7 +800,7 @@ def gdflix_bypass_api():
                     extracted_error = "Drivebot 'Generate Link' button missing."
                 elif "DRIVEBOT server choice <.+> found, but not within a <form>" in extracted_error or \
                      "Could not determine next URL or method for DRIVEBOT server choice" in extracted_error or \
-                     "Could not find a DRIVEBOT server choice button/link" in extracted_error : # Check specific error first
+                     "Could not find a DRIVEBOT server choice button/link" in extracted_error : 
                     extracted_error = "Failed at Drivebot server selection step (button not in form or action unclear)."
                 elif "All prioritized search attempts" in extracted_error:
                     extracted_error = "No supported download buttons found on the page."
@@ -795,8 +811,7 @@ def gdflix_bypass_api():
             status_code = 200 
 
     except Exception as e:
-        print(f"FATAL API Handler Error: {e}", file=sys.stderr)
-        print(traceback.format_exc(), file=sys.stderr)
+        app.logger.error(f"FATAL API Handler Error: {e}", exc_info=True)
         script_logs.append(f"FATAL API Handler Error: An unexpected server error occurred.")
         result["success"] = False
         result["error"] = "Internal server error processing the request."
@@ -807,7 +822,50 @@ def gdflix_bypass_api():
         response = make_response(jsonify(result), status_code)
         return response
 
-# --- Run Flask App ---
+# --- Self-Ping Endpoint ---
+@app.route('/ping', methods=['GET'])
+def ping_service():
+    app.logger.info("Ping endpoint called successfully.")
+    return "pong", 200
+
+# --- Self-Ping Background Task ( ... rest of your self_ping_task function ... ) ---
+def self_ping_task():
+    render_external_url = os.environ.get("RENDER_EXTERNAL_URL")
+    if not render_external_url:
+        app.logger.warning("RENDER_EXTERNAL_URL environment variable not found. Self-ping task will not run.")
+        return
+
+    ping_url = f"{render_external_url}/ping"
+    # The log message will now reflect the new SELF_PING_INTERVAL_SECONDS value
+    app.logger.info(f"Self-ping task started. Will ping {ping_url} every {SELF_PING_INTERVAL_SECONDS} seconds.")
+
+    while True:
+        time.sleep(SELF_PING_INTERVAL_SECONDS) 
+        try:
+            app.logger.info(f"Self-ping: Sending GET request to {ping_url}")
+            response = requests.get(ping_url, timeout=PING_REQUEST_TIMEOUT)
+            if response.status_code == 200:
+                app.logger.info(f"Self-ping successful (status {response.status_code}).")
+            else:
+                app.logger.warning(f"Self-ping to {ping_url} received non-200 status: {response.status_code}")
+        except requests.exceptions.Timeout:
+            app.logger.warning(f"Self-ping to {ping_url} timed out after {PING_REQUEST_TIMEOUT}s.")
+        except requests.exceptions.RequestException as e:
+            app.logger.error(f"Self-ping to {ping_url} failed: {e}")
+        except Exception as e:
+            app.logger.error(f"Unexpected error in self_ping_task: {e}", exc_info=True)
+
+
+# --- Run Flask App ( ... rest of your app run logic ... ) ---
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5001))
+
+    if os.environ.get("RENDER_EXTERNAL_URL"):
+        ping_thread = threading.Thread(target=self_ping_task, daemon=True)
+        ping_thread.start()
+        app.logger.info("Self-ping thread initiated.")
+    else:
+        app.logger.info("Self-ping not started (RENDER_EXTERNAL_URL not found - likely local development).")
+
+    app.logger.info(f"Starting Flask server on host 0.0.0.0, port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
