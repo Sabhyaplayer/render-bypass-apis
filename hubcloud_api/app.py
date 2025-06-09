@@ -41,7 +41,7 @@ if not app.debug: # Avoid duplicate handlers if Flask's debug mode is on
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
-# --- Configuration (Copied from your script) ---
+# --- Configuration ---
 DEFAULT_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
@@ -60,12 +60,12 @@ DRIVE_INTERMEDIATE_DOMAINS = [
     'cdn.ampproject.org', 'bloggingvector.shop', 'newssongs.co.in',
 ]
 
-# --- Self-Ping Configuration ---
-SELF_PING_INTERVAL_SECONDS = 10 * 60  # 10 minutes
+# --- Self-Ping Configuration (MODIFIED FOR AGGRESSIVE PING) ---
+SELF_PING_INTERVAL_SECONDS = 45  # Ping every 45 seconds to keep it hot
 PING_REQUEST_TIMEOUT = 20 # Timeout for the self-ping request itself
 
 
-# --- Helper Functions (Copied from your script) ---
+# --- Helper Functions (No changes needed below) ---
 def drive_is_intermediate_link(url):
     if not url or not isinstance(url, str) or not url.startswith('http'): return False
     try:
@@ -74,7 +74,6 @@ def drive_is_intermediate_link(url):
     except Exception: return False
 
 def drive_extract_final_download_link(soup, base_url, log_entries):
-    # (Keep the exact code from the previous version of this function)
     direct_link = None
     found_link = False
     log_entries.append("(drive) Searching for preferred button text...")
@@ -129,9 +128,8 @@ def drive_extract_final_download_link(soup, base_url, log_entries):
         log_entries.append("(drive) No final-looking download link found by drive methods.")
         return None
 
-# --- Core Function for 'drive' links (Copied from your script) ---
+# --- Core Function for 'drive' links ---
 def handle_drive_link(session, hubcloud_url):
-    # (Keep the exact code from the previous version of this function)
     current_url = hubcloud_url
     log_entries = []
     final_link = None
@@ -266,9 +264,8 @@ def handle_drive_link(session, hubcloud_url):
         log_entries.append(f"FATAL ERROR during drive link processing: {e}\n{traceback.format_exc()}")
         return None, log_entries
 
-# --- Helper/Core Functions for 'video' links (Copied from your script) ---
+# --- Helper/Core Functions for 'video' links ---
 def video_fetch_and_parse(session, url, referer=None, log_entries=None):
-    # (Keep the exact code from the previous version of this function)
     if log_entries is None: log_entries = []
     log_entries.append(f"(video) Fetching: {url}")
     current_headers = session.headers.copy()
@@ -295,7 +292,6 @@ def video_fetch_and_parse(session, url, referer=None, log_entries=None):
         return None, None, url, log_entries
 
 def video_find_intermediate_link(soup, initial_url, log_entries):
-    # (Keep the exact code from the previous version of this function)
     if not soup: return None, log_entries
     log_entries.append("(video) Searching for intermediate 'Generate...' link...")
     generate_link_tag = None
@@ -319,7 +315,6 @@ def video_find_intermediate_link(soup, initial_url, log_entries):
         return None, log_entries
 
 def video_find_final_download_link(soup, raw_html, intermediate_url, log_entries):
-     # (Keep the exact code from the previous version of this function)
     if not soup: return None, log_entries
     log_entries.append("(video) Searching for final download link on intermediate page...")
     final_link_tag = None; link_type = "Unknown"
@@ -351,7 +346,6 @@ def video_find_final_download_link(soup, raw_html, intermediate_url, log_entries
         return None, log_entries
 
 def handle_video_link(session, hubcloud_url):
-     # (Keep the exact code from the previous version of this function)
     final_link = None; log_entries = []
     try:
         log_entries.append(f"Processing Video Link: {hubcloud_url}"); session.headers.update(DEFAULT_HEADERS)
@@ -368,7 +362,6 @@ def handle_video_link(session, hubcloud_url):
 
 
 # --- CORS Helper Functions ---
-# These functions add the necessary headers for browsers
 def _build_cors_preflight_response():
     response = make_response()
     response.headers.add("Access-Control-Allow-Origin", "*")
@@ -383,20 +376,17 @@ def _corsify_actual_response(response):
 # --- Flask API Endpoint ---
 @app.route('/api/hubcloud', methods=['POST', 'OPTIONS'])
 def hubcloud_bypass_api():
-    # Handle CORS preflight request
     if request.method == 'OPTIONS':
         return _build_cors_preflight_response()
 
-    # Handle actual POST request
     elif request.method == 'POST':
         logs = []
         result = {"success": False, "error": "Request processing failed", "finalUrl": None, "logs": logs}
         hubcloud_url = None
         final_download_link = None
-        status_code = 500 # Default status code
+        status_code = 500
 
         try:
-            # Get JSON data from the request
             try:
                 data = request.get_json()
                 if not data:
@@ -409,7 +399,6 @@ def hubcloud_bypass_api():
                 status_code = 400
                 return _corsify_actual_response(jsonify(result)), status_code
 
-            # Validate URL
             if not hubcloud_url or not isinstance(hubcloud_url, str):
                 logs.append("Error: hubcloudUrl missing or invalid in request.")
                 result["error"] = "Missing or invalid hubcloudUrl in request body"
@@ -424,7 +413,6 @@ def hubcloud_bypass_api():
                  status_code = 400
                  return _corsify_actual_response(jsonify(result)), status_code
 
-            # Perform Scraping
             session = requests.Session()
             path = parsed_start_url.path.lower()
 
@@ -440,9 +428,7 @@ def hubcloud_bypass_api():
                  error_msg = f"Unknown HubCloud URL type (path: {parsed_start_url.path})"
                  logs.append(f"Error: {error_msg}")
                  result["error"] = error_msg
-                 # final_download_link remains None, status_code will be 500 if not set otherwise
 
-            # Prepare Response
             if final_download_link:
                 result["success"] = True
                 result["finalUrl"] = final_download_link
@@ -450,27 +436,22 @@ def hubcloud_bypass_api():
                 status_code = 200
             else:
                 result["success"] = False
-                # Try extracting specific error if not already set and no other error status was set
                 if result.get("error", "Request processing failed") == "Request processing failed":
                      failure_indicators = ["Error:", "FATAL ERROR", "FAILED", "Could not find", "timed out"]
                      extracted_error = "Extraction Failed (Check logs)"
                      for log_entry in reversed(logs):
                         if any(indicator in log_entry for indicator in failure_indicators):
-                             # More careful splitting, ensure there's a colon before splitting
                              parts = log_entry.split(":", 1)
                              extracted_error = parts[-1].strip() if len(parts) > 1 else log_entry.strip()
                              break
-                     result["error"] = extracted_error[:150] # Limit error length
-                # If it's a known failure type (like unknown URL), it might have set 400 already.
-                # If it's a scraping failure, 500 is appropriate.
-                # We let the status_code remain as 500 if not explicitly changed to 200 or 400.
+                     result["error"] = extracted_error[:150]
 
         except Exception as e:
             app.logger.error(f"FATAL API Handler Error: {e}", exc_info=True)
             logs.append(f"FATAL API Handler Error: An unexpected server error occurred.")
             result["success"] = False
             result["error"] = "Internal server error processing request."
-            status_code = 500 # Ensure status_code is 500 for unexpected exceptions
+            status_code = 500
 
         finally:
             result["logs"] = logs
@@ -486,9 +467,6 @@ def ping_service():
 
 # --- Self-Ping Background Task ---
 def self_ping_task():
-    """
-    Periodically pings the application's own /ping endpoint to keep it alive on free tiers.
-    """
     render_external_url = os.environ.get("RENDER_EXTERNAL_URL")
     if not render_external_url:
         app.logger.warning("RENDER_EXTERNAL_URL environment variable not found. HubCloud self-ping task will not run.")
@@ -498,7 +476,7 @@ def self_ping_task():
     app.logger.info(f"HubCloud self-ping task started. Will ping {ping_url} every {SELF_PING_INTERVAL_SECONDS} seconds.")
 
     while True:
-        time.sleep(SELF_PING_INTERVAL_SECONDS) # Sleep for the interval first
+        time.sleep(SELF_PING_INTERVAL_SECONDS)
         try:
             app.logger.info(f"HubCloud self-ping: Sending GET request to {ping_url}")
             response = requests.get(ping_url, timeout=PING_REQUEST_TIMEOUT)
@@ -516,15 +494,14 @@ def self_ping_task():
 
 # --- Run Flask App ---
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5002)) # Changed default port to avoid conflict if running both locally
+    port = int(os.environ.get("PORT", 5002))
 
-    # Start the self-ping thread only if RENDER_EXTERNAL_URL is set
     if os.environ.get("RENDER_EXTERNAL_URL"):
         ping_thread = threading.Thread(target=self_ping_task, daemon=True)
         ping_thread.start()
         app.logger.info("HubCloud self-ping thread initiated.")
     else:
-        app.logger.info("HubCloud self-ping not started (RENDER_EXTERNAL_URL not found - likely local development).")
+        app.logger.info("HubCloud self-ping not started (likely local development).")
 
     app.logger.info(f"Starting HubCloud Flask server on host 0.0.0.0, port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False) # Changed debug to False for consistency with other script
+    app.run(host='0.0.0.0', port=port, debug=False)
