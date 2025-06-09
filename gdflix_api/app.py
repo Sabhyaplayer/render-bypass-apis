@@ -9,14 +9,11 @@ import re
 import json
 import traceback
 import sys
-import os
+import os # Added for os.environ.get
 from flask import Flask, request, jsonify, make_response
-from flask_cors import CORS
-import threading
-import logging
-
-# MODIFICATION: Increase Python's recursion limit for complex HTML parsing
-sys.setrecursionlimit(3000)
+from flask_cors import CORS # Import CORS
+import threading # For self-ping
+import logging # For better logging
 
 # Try importing lxml, fall back to html.parser if not installed
 try:
@@ -33,12 +30,12 @@ app = Flask(__name__)
 CORS(app)
 
 # --- Basic Logging Configuration ---
-if not app.debug:
+if not app.debug: 
     stream_handler = logging.StreamHandler()
     stream_handler.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     stream_handler.setFormatter(formatter)
-
+    
     app.logger.addHandler(stream_handler)
     app.logger.setLevel(logging.INFO)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -48,19 +45,19 @@ HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': 'https://google.com'
+    'Referer': 'https://google.com' 
 }
-GENERATION_TIMEOUT = 40
-POLL_INTERVAL = 5
-REQUEST_TIMEOUT = 30
-MAX_REDIRECT_HOPS = 5
+GENERATION_TIMEOUT = 40 
+POLL_INTERVAL = 5 
+REQUEST_TIMEOUT = 30 
+MAX_REDIRECT_HOPS = 5 
 
 # --- Self-Ping Configuration ---
-SELF_PING_INTERVAL_SECONDS = 14 * 60  # 14 minutes
-PING_REQUEST_TIMEOUT = 20
+# MODIFIED LINE: Changed from 10 * 60 to 48
+SELF_PING_INTERVAL_SECONDS = 48  # 48 seconds
+PING_REQUEST_TIMEOUT = 20 
 
-
-# --- Core GDFLIX Bypass Function (Original Logic) ---
+# --- Core GDFLIX Bypass Function ( ... rest of your function ... ) ---
 def get_gdflix_download_link(start_url):
     session = requests.Session()
     session.headers.update(HEADERS)
@@ -70,10 +67,12 @@ def get_gdflix_download_link(start_url):
     landed_url = None
     html_content = None
 
+    # Helper variables for Drivebot path to avoid NameError if path isn't fully taken
     page2_drivebot_url = None
-    html_content_p2_drivebot = None
+    html_content_p2_drivebot = None # To store HTML of index server page for debugging
     page3_drivebot_url = None
-    html_content_p3_drivebot = None
+    html_content_p3_drivebot = None # To store HTML of generate link page for debugging
+
 
     try:
         while hops_count < MAX_REDIRECT_HOPS:
@@ -140,6 +139,7 @@ def get_gdflix_download_link(start_url):
         possible_tags_p1 = soup1.find_all(['a', 'button'])
         logs.append(f"Found {len(possible_tags_p1)} potential link/button tags on final content page ({page1_url}).")
 
+        # --- PRIORITY 1: Look for "PixeldrainDL" or "Pixeldrain" ---
         logs.append("Searching for 'PixeldrainDL' or 'Pixeldrain' button text pattern on final content page...")
         pixeldrain_link_tag = None
         pixeldrain_pattern = re.compile(r'pixeldrain\s*(dl)?', re.IGNORECASE)
@@ -167,6 +167,8 @@ def get_gdflix_download_link(start_url):
         else:
             logs.append("Info: 'PixeldrainDL' or 'Pixeldrain' button/pattern not found. Trying next priority.")
 
+
+        # --- PRIORITY 2: Look for "CLOUD DOWNLOAD [R2]" ---
         logs.append("Searching for 'CLOUD DOWNLOAD [R2]' button text pattern on final content page...")
         cloud_r2_link_tag = None
         cloud_r2_pattern = re.compile(r'cloud\s+download\s+\[R2\]', re.IGNORECASE)
@@ -194,6 +196,8 @@ def get_gdflix_download_link(start_url):
         else:
             logs.append("Info: 'CLOUD DOWNLOAD [R2]' button/pattern not found. Trying next priority.")
         
+
+        # --- PRIORITY 3: Look for "Fast Cloud Download" ---
         logs.append("Searching for 'Fast Cloud Download/DL' button text pattern on final content page...")
         fast_cloud_link_tag = None
         fast_cloud_pattern = re.compile(r'fast\s*cloud\s*(download|dl)', re.IGNORECASE)
@@ -215,6 +219,7 @@ def get_gdflix_download_link(start_url):
             if not fast_cloud_href:
                 logs.append(f"  Error: Found '{fast_cloud_link_tag.get_text(strip=True)}' (Fast Cloud) element but couldn't get href/action. Trying next priority.")
             else:
+                # --- Start of Fast Cloud multi-step logic ---
                 intermediate_url = urljoin(page1_url, fast_cloud_href)
                 logs.append(f"Found intermediate link URL (from Fast Cloud button): {intermediate_url}")
                 time.sleep(1) 
@@ -313,7 +318,7 @@ def get_gdflix_download_link(start_url):
                         logs.append(f"  POST headers (excluding session defaults): {post_headers}")
 
                         logs.append(f"Sending POST request to: {page2_url}")
-                        page3_fc_url = None
+                        page3_fc_url = None # Differentiate from drivebot's page3_url
                         try:
                             post_response = session.post(page2_url, data=final_post_data, headers=post_headers, timeout=REQUEST_TIMEOUT)
                             logs.append(f"  POST response status: {post_response.status_code}")
@@ -445,6 +450,7 @@ def get_gdflix_download_link(start_url):
         else: 
             logs.append("Info: 'Fast Cloud Download/DL' button/pattern not found. Trying next priority.")
 
+        # --- PRIORITY 4: Look for "DRIVEBOT" ---
         logs.append("Searching for 'DRIVEBOT' button text pattern on final content page (Priority 4)...")
         drivebot_initial_tag = None
         drivebot_initial_pattern = re.compile(r'DRIVEBOT', re.IGNORECASE)
@@ -681,6 +687,7 @@ def get_gdflix_download_link(start_url):
         else:
             logs.append("Info: 'DRIVEBOT' button/pattern not found on initial page.")
         
+
         logs.append("Error: All prioritized search attempts (Pixeldrain, R2, Fast Cloud, Drivebot) failed to yield a download link.")
 
     except requests.exceptions.Timeout as e:
@@ -688,10 +695,8 @@ def get_gdflix_download_link(start_url):
         return None, logs
     except requests.exceptions.HTTPError as e:
         logs.append(f"Error: HTTP Error: {e.response.status_code} {e.response.reason} for {e.request.url}")
-        try:
-            logs.append(f"  Response text snippet: {e.response.text[:500]}")
-        except Exception:
-            pass
+        try: logs.append(f"  Response text snippet: {e.response.text[:500]}")
+        except Exception: pass
         return None, logs
     except requests.exceptions.RequestException as e:
         logs.append(f"Error: Network or Request error: {e}")
@@ -703,12 +708,12 @@ def get_gdflix_download_link(start_url):
     return None, logs
 
 
-# --- Flask API Endpoint ---
+# --- Flask API Endpoint ( ... rest of your API endpoint ... ) ---
 @app.route('/api/gdflix', methods=['POST'])
 def gdflix_bypass_api():
     script_logs = []
     result = {"success": False, "error": "Request processing failed", "finalUrl": None, "logs": script_logs}
-    status_code = 500
+    status_code = 500 
 
     try:
         gdflix_url = None
@@ -750,60 +755,60 @@ def gdflix_bypass_api():
             script_logs.append("Bypass process failed to find the final download link.")
             result["success"] = False
             failure_indicators = [
-                "Error:", "FATAL:", "FAILED", "timed out", "neither", "blocked",
-                "exceeded maximum", "all prioritized search attempts",
-                "could not find the final gdindex.lol link",
+                "Error:", "FATAL:", "FAILED", "timed out", "neither", "blocked", 
+                "exceeded maximum", "all prioritized search attempts", 
+                "could not find the final gdindex.lol link", 
                 "'Generate Link' button/element not found",
                 "Could not determine next URL or method for DRIVEBOT server choice",
                 "Could not find a DRIVEBOT server choice button/link",
-                "DRIVEBOT server choice <.+> found, but not within a <form>"
+                "DRIVEBOT server choice <.+> found, but not within a <form>" 
             ]
             extracted_error = "GDFLIX Extraction Failed (Check logs for details)"
-            timeout_occurred = False
+            timeout_occurred = False 
 
             last_error_log = ""
             for log_entry in reversed(script_logs):
                 log_entry_lower = log_entry.lower()
-                if "link generation timed out" in log_entry_lower:
+                if "link generation timed out" in log_entry_lower: 
                     last_error_log = log_entry
                     timeout_occurred = True
-                    break
-
-                if any((indicator.startswith("DRIVEBOT server choice <.+>") and re.search(indicator, log_entry, re.IGNORECASE)) or
-                       (not indicator.startswith("DRIVEBOT server choice <.+>") and indicator.lower() in log_entry_lower)
-                       for indicator in failure_indicators):
-                    if not last_error_log or len(log_entry) > len(last_error_log):
-                        last_error_log = log_entry
-
-            if timeout_occurred:
+                    break 
+                
+                if any( (indicator.startswith("DRIVEBOT server choice <.+>") and re.search(indicator, log_entry, re.IGNORECASE)) or 
+                         (not indicator.startswith("DRIVEBOT server choice <.+>") and indicator.lower() in log_entry_lower)
+                         for indicator in failure_indicators):
+                    if not last_error_log or len(log_entry) > len(last_error_log): 
+                         last_error_log = log_entry
+            
+            if timeout_occurred: 
                 extracted_error = "Link generation (FastCloud) timed out, please try again."
             elif last_error_log:
                 parts = re.split(r'(?:Error|FATAL|Info|Warning):\s*', last_error_log, maxsplit=1, flags=re.IGNORECASE)
                 extracted_error = (parts[-1] if len(parts) > 1 else last_error_log).strip()
 
                 if "Neither 'Cloud Resume Download' nor 'Generate Cloud Link'" in extracted_error:
-                    extracted_error = "Could not find required buttons on intermediate page (FastCloud)."
+                     extracted_error = "Could not find required buttons on intermediate page (FastCloud)."
                 elif "Exceeded maximum redirect hops" in extracted_error:
-                    extracted_error = "Too many redirects encountered."
-                elif "Failed to obtain a valid polling URL" in extracted_error:
-                    extracted_error = "Failed to initiate link generation process (FastCloud)."
+                       extracted_error = "Too many redirects encountered."
+                elif "Failed to obtain a valid polling URL" in extracted_error: 
+                       extracted_error = "Failed to initiate link generation process (FastCloud)."
                 elif "Failed to retrieve final page content" in extracted_error:
-                    extracted_error = "Could not load initial page content."
-                elif "could not find the final gdindex.lol link" in extracted_error.lower():
+                     extracted_error = "Could not load initial page content."
+                elif "could not find the final gdindex.lol link" in extracted_error.lower(): 
                     extracted_error = "Failed to extract link after Drivebot generation step."
-                elif "'Generate Link' button/element not found" in extracted_error:
+                elif "'Generate Link' button/element not found" in extracted_error: 
                     extracted_error = "Drivebot 'Generate Link' button missing."
                 elif "DRIVEBOT server choice <.+> found, but not within a <form>" in extracted_error or \
                      "Could not determine next URL or method for DRIVEBOT server choice" in extracted_error or \
-                     "Could not find a DRIVEBOT server choice button/link" in extracted_error:
+                     "Could not find a DRIVEBOT server choice button/link" in extracted_error : 
                     extracted_error = "Failed at Drivebot server selection step (button not in form or action unclear)."
                 elif "All prioritized search attempts" in extracted_error:
                     extracted_error = "No supported download buttons found on the page."
-            else:
-                extracted_error = "Extraction failed. See logs for details."
+            else: 
+                 extracted_error = "Extraction failed. See logs for details."
 
-            result["error"] = extracted_error[:250]
-            status_code = 200
+            result["error"] = extracted_error[:250] 
+            status_code = 200 
 
     except Exception as e:
         app.logger.error(f"FATAL API Handler Error: {e}", exc_info=True)
@@ -817,15 +822,13 @@ def gdflix_bypass_api():
         response = make_response(jsonify(result), status_code)
         return response
 
-
 # --- Self-Ping Endpoint ---
 @app.route('/ping', methods=['GET'])
 def ping_service():
     app.logger.info("Ping endpoint called successfully.")
     return "pong", 200
 
-
-# --- Self-Ping Background Task ---
+# --- Self-Ping Background Task ( ... rest of your self_ping_task function ... ) ---
 def self_ping_task():
     render_external_url = os.environ.get("RENDER_EXTERNAL_URL")
     if not render_external_url:
@@ -833,10 +836,11 @@ def self_ping_task():
         return
 
     ping_url = f"{render_external_url}/ping"
-    app.logger.info(f"Self-ping task started. Will ping {ping_url} every {SELF_PING_INTERVAL_SECONDS / 60:.1f} minutes.")
+    # The log message will now reflect the new SELF_PING_INTERVAL_SECONDS value
+    app.logger.info(f"Self-ping task started. Will ping {ping_url} every {SELF_PING_INTERVAL_SECONDS} seconds.")
 
     while True:
-        time.sleep(SELF_PING_INTERVAL_SECONDS)
+        time.sleep(SELF_PING_INTERVAL_SECONDS) 
         try:
             app.logger.info(f"Self-ping: Sending GET request to {ping_url}")
             response = requests.get(ping_url, timeout=PING_REQUEST_TIMEOUT)
@@ -852,11 +856,16 @@ def self_ping_task():
             app.logger.error(f"Unexpected error in self_ping_task: {e}", exc_info=True)
 
 
-# --- Run Flask App (Gunicorn uses this on Render) ---
-if "RENDER" in os.environ:
-    ping_thread = threading.Thread(target=self_ping_task, daemon=True)
-    ping_thread.start()
-
+# --- Run Flask App ( ... rest of your app run logic ... ) ---
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5001))
+
+    if os.environ.get("RENDER_EXTERNAL_URL"):
+        ping_thread = threading.Thread(target=self_ping_task, daemon=True)
+        ping_thread.start()
+        app.logger.info("Self-ping thread initiated.")
+    else:
+        app.logger.info("Self-ping not started (RENDER_EXTERNAL_URL not found - likely local development).")
+
+    app.logger.info(f"Starting Flask server on host 0.0.0.0, port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
