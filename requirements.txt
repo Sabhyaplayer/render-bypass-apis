@@ -1,7 +1,9 @@
+# Flask and Web Server
 Flask
-flask-cors
+Flask-Cors
+gunicorn
+
+# HTTP Requests and Web Scraping
 requests
 beautifulsoup4
 lxml
-gunicorn
-gevent
