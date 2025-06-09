@@ -1,8 +1,7 @@
-# render-bypass-apis/requirements.txt
+Flask
+flask-cors
 requests
 beautifulsoup4
-Flask
+lxml
 gunicorn
-lxml # Optional but recommended for better parsing speed/reliability
-Flask-CORS
-cloudscraper
+gevent
