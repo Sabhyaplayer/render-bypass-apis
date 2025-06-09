@@ -53,11 +53,11 @@ REQUEST_TIMEOUT = 30
 MAX_REDIRECT_HOPS = 5 
 
 # --- Self-Ping Configuration ---
-# MODIFIED LINE: Changed from 10 * 60 to 48
-SELF_PING_INTERVAL_SECONDS = 48  # 48 seconds
+### MODIFIED: Render free instances sleep after 15 minutes. Pinging every 14 minutes is safe and efficient.
+SELF_PING_INTERVAL_SECONDS = 14 * 60  # 840 seconds (14 minutes)
 PING_REQUEST_TIMEOUT = 20 
 
-# --- Core GDFLIX Bypass Function ( ... rest of your function ... ) ---
+# --- Core GDFLIX Bypass Function ( ... function is unchanged ... ) ---
 def get_gdflix_download_link(start_url):
     session = requests.Session()
     session.headers.update(HEADERS)
@@ -708,7 +708,7 @@ def get_gdflix_download_link(start_url):
     return None, logs
 
 
-# --- Flask API Endpoint ( ... rest of your API endpoint ... ) ---
+# --- Flask API Endpoint ( ... function is unchanged ... ) ---
 @app.route('/api/gdflix', methods=['POST'])
 def gdflix_bypass_api():
     script_logs = []
@@ -828,7 +828,7 @@ def ping_service():
     app.logger.info("Ping endpoint called successfully.")
     return "pong", 200
 
-# --- Self-Ping Background Task ( ... rest of your self_ping_task function ... ) ---
+# --- Self-Ping Background Task ---
 def self_ping_task():
     render_external_url = os.environ.get("RENDER_EXTERNAL_URL")
     if not render_external_url:
@@ -836,8 +836,8 @@ def self_ping_task():
         return
 
     ping_url = f"{render_external_url}/ping"
-    # The log message will now reflect the new SELF_PING_INTERVAL_SECONDS value
-    app.logger.info(f"Self-ping task started. Will ping {ping_url} every {SELF_PING_INTERVAL_SECONDS} seconds.")
+    ### MODIFIED: More descriptive log message
+    app.logger.info(f"Self-ping task started. Will ping {ping_url} every {SELF_PING_INTERVAL_SECONDS / 60:.1f} minutes.")
 
     while True:
         time.sleep(SELF_PING_INTERVAL_SECONDS) 
@@ -856,16 +856,19 @@ def self_ping_task():
             app.logger.error(f"Unexpected error in self_ping_task: {e}", exc_info=True)
 
 
-# --- Run Flask App ( ... rest of your app run logic ... ) ---
+### MODIFIED: This entire block is now wrapped so the ping thread only starts
+### when the Gunicorn server starts it. The `app.run()` part is only for local testing.
+if "RENDER" in os.environ:
+    # This block runs on Render
+    ping_thread = threading.Thread(target=self_ping_task, daemon=True)
+    ping_thread.start()
+    app.logger.info("Self-ping thread initiated for Render deployment.")
+
 if __name__ == '__main__':
+    ### EXPLANATION: This block is for LOCAL DEVELOPMENT ONLY.
+    ### Gunicorn does NOT run this. When you run `python gdflix_api/app.py` on your
+    ### own computer, this code will execute, starting the development server.
     port = int(os.environ.get("PORT", 5001))
-
-    if os.environ.get("RENDER_EXTERNAL_URL"):
-        ping_thread = threading.Thread(target=self_ping_task, daemon=True)
-        ping_thread.start()
-        app.logger.info("Self-ping thread initiated.")
-    else:
-        app.logger.info("Self-ping not started (RENDER_EXTERNAL_URL not found - likely local development).")
-
-    app.logger.info(f"Starting Flask server on host 0.0.0.0, port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.logger.info("Starting Flask DEVELOPMENT server for local testing.")
+    app.logger.info("This development server is NOT used on Render.")
+    app.run(host='0.0.0.0', port=port, debug=True)
